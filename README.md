@@ -136,7 +136,7 @@ pnpm dev
 | ขั้น | งาน | สถานะ |
 |---|---|---|
 | 1 | Monorepo + tooling + `.env.example` + README | ✅ เสร็จ |
-| 2 | Prisma schema (core + โมดูล 1 รวม stock + disposal) + migration | ✅ schema เสร็จ — *รอยืนยันก่อน migrate* |
+| 2 | Prisma schema (core + โมดูล 1 รวม stock + disposal) + migration | ✅ เสร็จ (migration `init` ใช้แล้ว) |
 | 3 | Core: auth, RBAC, users, registry, audit, attachments, notifications, masterdata | ⏳ |
 | 4 | LINE core: webhook + line-binding + dynamic rich menu | ⏳ |
 | 5 | โมดูล 1 — Flow A (แจ้งส่วนลด + อนุมัติพิเศษ) | ⏳ |
