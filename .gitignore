@@ -7,6 +7,13 @@ dist/
 build/
 *.tsbuildinfo
 
+# compiled TS artifacts that must never sit beside sources
+packages/shared/src/**/*.js
+packages/shared/src/**/*.d.ts
+
+# dev-only local file storage (attachments fallback)
+apps/api/storage-dev/
+
 # env
 .env
 .env.local

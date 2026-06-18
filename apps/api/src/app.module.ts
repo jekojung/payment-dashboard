@@ -1,17 +1,49 @@
-import { Module } from '@nestjs/common';
+import { Module, OnModuleInit } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { APP_GUARD } from '@nestjs/core';
+import { PrismaModule } from './prisma/prisma.module';
+import { JwtAuthGuard } from './core/auth/jwt-auth.guard';
+import { AuthModule } from './core/auth/auth.module';
+import { RbacModule } from './core/rbac/rbac.module';
+import { PermissionsGuard } from './core/rbac/permissions.guard';
+import { UsersModule } from './core/users/users.module';
+import { AuditModule } from './core/audit/audit.module';
+import { AttachmentsModule } from './core/attachments/attachments.module';
+import { NotificationsModule } from './core/notifications/notifications.module';
+import { MasterdataModule } from './core/masterdata/masterdata.module';
+import { RegistryModule } from './core/modules/registry.module';
+import { RegistryService } from './core/modules/registry.service';
+import { ReturnsDiscountModule } from './modules/returns-discount/returns-discount.module';
 
 /**
- * AppModule — core platform root.
- * โมดูล core (auth, rbac, users, modules registry, audit, attachments,
- * notifications, masterdata, line) และโมดูลธุรกิจ (returns-discount)
- * จะถูกเสียบเข้ามาในขั้นที่ 3 เป็นต้นไป
+ * AppModule — core platform root + โมดูลธุรกิจ
+ * global guards: JwtAuthGuard (authn) -> PermissionsGuard (authz)
  */
 @Module({
   imports: [
-    ConfigModule.forRoot({
-      isGlobal: true,
-    }),
+    ConfigModule.forRoot({ isGlobal: true, envFilePath: ['.env', '../../.env'] }),
+    PrismaModule,
+    RbacModule,
+    AuditModule,
+    NotificationsModule,
+    AttachmentsModule,
+    RegistryModule,
+    AuthModule,
+    UsersModule,
+    MasterdataModule,
+    // โมดูลธุรกิจ (ลงทะเบียนผ่าน Registry)
+    ReturnsDiscountModule,
+  ],
+  providers: [
+    { provide: APP_GUARD, useClass: JwtAuthGuard },
+    { provide: APP_GUARD, useClass: PermissionsGuard },
   ],
 })
-export class AppModule {}
+export class AppModule implements OnModuleInit {
+  constructor(private readonly registry: RegistryService) {}
+
+  async onModuleInit(): Promise<void> {
+    // sync โมดูลที่ลงทะเบียนแล้วลงตาราง modules
+    await this.registry.syncToDatabase();
+  }
+}

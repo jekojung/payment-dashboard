@@ -79,6 +79,7 @@ model User {
   id           String   @id @default(cuid())
   employeeCode String   @unique @map("employee_code")
   name         String
+  passwordHash String?  @map("password_hash") // ผู้ใช้ฝั่ง web ตั้งรหัสผ่าน; staff ที่ใช้แค่ LINE เป็น null ได้
   lineUserId   String?  @unique @map("line_user_id")
   department   String?
   isActive     Boolean  @default(true) @map("is_active")

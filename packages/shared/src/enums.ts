@@ -86,9 +86,17 @@ export enum ModuleKey {
 
 /**
  * permissions รูปแบบ `module:action`
+ * core = สิทธิ์ระดับแพลตฟอร์ม (admin จัดการ users/master data/modules/audit)
  * โมดูล 1 (returns_discount)
  */
 export const Permissions = {
+  CORE: {
+    MANAGE_USERS: 'core:manage_users',
+    MANAGE_MASTERDATA: 'core:manage_masterdata',
+    MANAGE_DISCOUNT_STANDARDS: 'core:manage_discount_standards',
+    MANAGE_MODULES: 'core:manage_modules',
+    VIEW_AUDIT: 'core:view_audit',
+  },
   RETURNS_DISCOUNT: {
     VIEW: 'returns_discount:view',
     CREATE: 'returns_discount:create',
@@ -98,3 +106,52 @@ export const Permissions = {
     SET_SALE_VALUE: 'returns_discount:set_sale_value',
   },
 } as const;
+
+/** รวม permission keys ทั้งหมดเป็น flat list (ใช้ seed permissions table) */
+export const ALL_PERMISSION_KEYS: string[] = [
+  ...Object.values(Permissions.CORE),
+  ...Object.values(Permissions.RETURNS_DISCOUNT),
+];
+
+/**
+ * แมป role → permissions (ค่าเริ่มต้น)
+ * system_admin เป็น super-admin (ผ่านทุก permission) จึงไม่ต้องลิสต์ทั้งหมด
+ */
+export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
+  [RoleKey.SYSTEM_ADMIN]: ALL_PERMISSION_KEYS,
+  [RoleKey.EXECUTIVE]: [
+    Permissions.CORE.MANAGE_DISCOUNT_STANDARDS,
+    Permissions.RETURNS_DISCOUNT.VIEW,
+    Permissions.RETURNS_DISCOUNT.SET_SALE_VALUE,
+  ],
+  [RoleKey.SALES_LEAD]: [
+    Permissions.RETURNS_DISCOUNT.VIEW,
+    Permissions.RETURNS_DISCOUNT.CREATE,
+    Permissions.RETURNS_DISCOUNT.APPROVE_SPECIAL,
+  ],
+  [RoleKey.WAREHOUSE_LEAD]: [
+    Permissions.RETURNS_DISCOUNT.VIEW,
+    Permissions.RETURNS_DISCOUNT.RECEIVE,
+    Permissions.RETURNS_DISCOUNT.DISPOSAL,
+  ],
+  [RoleKey.SALES_STAFF]: [Permissions.RETURNS_DISCOUNT.CREATE],
+  [RoleKey.WAREHOUSE_STAFF]: [
+    Permissions.RETURNS_DISCOUNT.VIEW,
+    Permissions.RETURNS_DISCOUNT.RECEIVE,
+    Permissions.RETURNS_DISCOUNT.DISPOSAL,
+  ],
+  [RoleKey.TRANSPORT_LEAD]: [],
+  [RoleKey.TRANSPORT_STAFF]: [],
+};
+
+/** ช่องทางของแต่ละ role (web / line) — ใช้ตอน seed roles */
+export const ROLE_CHANNELS: Record<string, Channel[]> = {
+  [RoleKey.SYSTEM_ADMIN]: [Channel.WEB],
+  [RoleKey.EXECUTIVE]: [Channel.WEB],
+  [RoleKey.SALES_LEAD]: [Channel.WEB, Channel.LINE],
+  [RoleKey.WAREHOUSE_LEAD]: [Channel.WEB, Channel.LINE],
+  [RoleKey.SALES_STAFF]: [Channel.LINE],
+  [RoleKey.WAREHOUSE_STAFF]: [Channel.LINE],
+  [RoleKey.TRANSPORT_LEAD]: [Channel.LINE],
+  [RoleKey.TRANSPORT_STAFF]: [Channel.LINE],
+};

@@ -80,6 +80,35 @@ pnpm dev
 
 > รีเซ็ตฐานข้อมูล (ลบ + migrate + seed ใหม่): `pnpm db:reset`
 
+### บัญชีทดสอบ (จาก seed — รหัสผ่านเดียวกัน `password123`)
+
+| employeeCode | role | ช่องทาง |
+|---|---|---|
+| `ADMIN001` | system_admin | web (เห็นทุกอย่าง) |
+| `EXEC001` | executive | web (ดู + แก้ตารางส่วนลด + บันทึกมูลค่าขาย) |
+| `SLEAD001` | sales_lead | web + line (อนุมัติพิเศษ) |
+| `WLEAD001` | warehouse_lead | web + line (คลัง) |
+| `SALE001` | sales_staff | line (แจ้งส่วนลด) |
+| `WH001` | warehouse_staff | line (รับ/ตัดจำหน่าย/ตรวจสต็อก) |
+
+ตัวอย่าง login: `POST /auth/login { "employeeCode": "ADMIN001", "password": "password123" }`
+
+### API หลัก (ขั้นที่ 3)
+
+| method · path | สิทธิ์ | หมายเหตุ |
+|---|---|---|
+| `POST /auth/login` | public | คืน JWT + roles/permissions |
+| `POST /auth/line/bind` | public | ผูก LINE ด้วยรหัสพนักงาน |
+| `GET /auth/me` | (token) | ข้อมูลผู้ใช้ปัจจุบัน |
+| `GET /modules/me/navigation` | (token) | เมนู LINE/เว็บ/การ์ด ตามสิทธิ์ (dynamic) |
+| `GET/POST/PATCH /users`, `DELETE /users/:id/line-binding` | `core:manage_users` | จัดการผู้ใช้ + ลบการผูก LINE |
+| `GET /masterdata/*` | (token) | อ่าน master data |
+| `POST/PATCH /masterdata/*` | `core:manage_masterdata` | จัดการ (ยกเว้นตารางส่วนลด) |
+| `POST/PATCH /masterdata/discount-standards` | `core:manage_discount_standards` | admin + executive |
+| `GET /notifications`, `PATCH /notifications/read` | (token) | การแจ้งเตือนของฉัน |
+| `GET /attachments` | (token) | ไฟล์แนบของ owner |
+| `GET /audit` | `core:view_audit` | audit log |
+
 ---
 
 ## Environment Variables
@@ -137,7 +166,7 @@ pnpm dev
 |---|---|---|
 | 1 | Monorepo + tooling + `.env.example` + README | ✅ เสร็จ |
 | 2 | Prisma schema (core + โมดูล 1 รวม stock + disposal) + migration | ✅ เสร็จ (migration `init` ใช้แล้ว) |
-| 3 | Core: auth, RBAC, users, registry, audit, attachments, notifications, masterdata | ⏳ |
+| 3 | Core: auth, RBAC, users, registry, audit, attachments, notifications, masterdata | ✅ เสร็จ (API + เทสต์) |
 | 4 | LINE core: webhook + line-binding + dynamic rich menu | ⏳ |
 | 5 | โมดูล 1 — Flow A (แจ้งส่วนลด + อนุมัติพิเศษ) | ⏳ |
 | 6 | โมดูล 1 — Flow B (รับเข้า + Google Drive + stock movement) | ⏳ |
