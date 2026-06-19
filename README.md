@@ -121,6 +121,9 @@ pnpm dev
 | `GET /returns-discount/documents` | `returns_discount:view` | รายการใบ GD (เต็มในขั้นที่ 9) |
 | `GET /returns-discount/receivable` | `returns_discount:receive` | ใบ GD ที่มีรายการพร้อมรับ (Flow B) |
 | `POST /returns-discount/items/:id/receive` | `returns_discount:receive` | รับสินค้า (multipart: `photo` + `receivedQuantity`) → upload + stock movement + ธง mismatch |
+| `POST /returns-discount/disposals` | `returns_discount:disposal` | ตัดจำหน่าย (validate ≤ คงเหลือ, เหตุผล + คู่ค้าปลายทาง, sale_value=pending) |
+| `GET /returns-discount/stock` | `returns_discount:view` | ยอดคงเหลือต่อ (สินค้า/รุ่น); `?all=true` รวมคงเหลือ 0 |
+| `GET /returns-discount/stock/ledger` | `returns_discount:view` | ประวัติ movement ของสินค้า/รุ่น |
 
 > **LINE (Flow A):** หัวหน้าได้ Flex card อนุมัติ/ปฏิเสธผ่าน push; กดปุ่ม postback → อนุมัติทันที หรือกดปฏิเสธแล้วพิมพ์เหตุผลตามมา; ผลแจ้งกลับฝ่ายขายเป็น Flex
 
@@ -200,7 +203,7 @@ pnpm dev
 | 4 | LINE core: webhook + line-binding + dynamic rich menu | ✅ เสร็จ (verify signature ทดสอบกับ secret จริงแล้ว) |
 | 5 | โมดูล 1 — Flow A (แจ้งส่วนลด + อนุมัติพิเศษ) | ✅ เสร็จ (REST + Flex + postback + เทสต์ 12) |
 | 6 | โมดูล 1 — Flow B (รับเข้า + Google Drive + stock movement) | ✅ เสร็จ (multipart upload + movement + mismatch + เทสต์ 7) |
-| 7 | โมดูล 1 — Flow C (ตัดจำหน่าย) + Flow D (ตรวจสต็อก) | ⏳ |
+| 7 | โมดูล 1 — Flow C (ตัดจำหน่าย) + Flow D (ตรวจสต็อก) | ✅ เสร็จ (3 เหตุผล + validate คงเหลือ + ledger + เทสต์ 8) |
 | 8 | Web: dashboard shell + login + nav | ⏳ |
 | 9 | Web: หน้าโมดูล 1 + หน้า admin | ⏳ |
 | 10 | Seed data ครบ + ตรวจ end-to-end | ⏳ |

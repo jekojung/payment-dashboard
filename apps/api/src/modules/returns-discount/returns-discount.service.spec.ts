@@ -1,9 +1,12 @@
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import {
   ApprovalStatus,
+  CounterpartyKind,
+  CounterpartyType,
   DiscountStatus,
   Permissions,
   ReceiptStatus,
+  SaleValueStatus,
   StockMovementType,
 } from '@tpg/shared';
 import { ReturnsDiscountService } from './returns-discount.service';
@@ -29,7 +32,11 @@ function makeService() {
         ...args.data,
       })),
       aggregate: jest.fn().mockResolvedValue({ _sum: { quantityChange: 0 } }),
+      groupBy: jest.fn().mockResolvedValue([]),
     },
+    disposalReason: { findUnique: jest.fn() },
+    supplier: { findUnique: jest.fn() },
+    buyer: { findUnique: jest.fn() },
     customer: { findUnique: jest.fn() },
     user: { findUnique: jest.fn() },
   };
@@ -367,5 +374,133 @@ describe('ReturnsDiscountService.receiveItem (Flow B)', () => {
 
     const res = await service.receiveItem(whActor, 'item1', 10, photo);
     expect(res.documentStatus).toBe('partially_received');
+  });
+});
+
+describe('ReturnsDiscountService.createDisposal (Flow C)', () => {
+  const whActor = {
+    id: 'u-wh',
+    name: 'บุญมี พนักงานคลัง',
+    permissions: [P.DISPOSAL],
+    isSystemAdmin: false,
+  };
+  const product = { id: 'p1', name: 'แบตเตอรี่', hasModels: false };
+
+  function setup(balance: number, reason: { counterpartyKind: string; isActive?: boolean }) {
+    const ctx = makeService();
+    ctx.prisma.product.findUnique.mockResolvedValue(product);
+    ctx.prisma.returnStockMovement.aggregate.mockResolvedValue({
+      _sum: { quantityChange: balance },
+    });
+    ctx.prisma.disposalReason.findUnique.mockResolvedValue({
+      id: 'r1',
+      name: 'ขายซาก',
+      isActive: reason.isActive ?? true,
+      counterpartyKind: reason.counterpartyKind,
+    });
+    return ctx;
+  }
+
+  it('ตัดจำหน่ายปกติ (buyer) → movement -qty, saleValue pending, คงเหลือลด', async () => {
+    const { service, prisma } = setup(20, { counterpartyKind: CounterpartyKind.BUYER });
+    prisma.buyer.findUnique.mockResolvedValue({ id: 'b1', name: 'ร้านรับซื้อซาก' });
+
+    const res = await service.createDisposal(whActor, {
+      productId: 'p1',
+      quantity: 5,
+      disposalReasonId: 'r1',
+      counterpartyId: 'b1',
+    });
+
+    const mv = prisma.returnStockMovement.create.mock.calls[0][0].data;
+    expect(mv.quantityChange).toBe(-5);
+    expect(mv.movementType).toBe(StockMovementType.DISPOSAL);
+    expect(mv.saleValueStatus).toBe(SaleValueStatus.PENDING);
+    expect(mv.counterpartyType).toBe(CounterpartyType.BUYER);
+    expect(mv.counterpartyName).toBe('ร้านรับซื้อซาก');
+    expect(res.balanceBefore).toBe(20);
+    expect(res.balanceAfter).toBe(15);
+  });
+
+  it('ตัดเกินคงเหลือ → BadRequest', async () => {
+    const { service } = setup(3, { counterpartyKind: CounterpartyKind.BUYER });
+    await expect(
+      service.createDisposal(whActor, {
+        productId: 'p1',
+        quantity: 10,
+        disposalReasonId: 'r1',
+        counterpartyName: 'x',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('เหตุผล supplier + เลือก id → เติมชื่อ supplier', async () => {
+    const { service, prisma } = setup(20, { counterpartyKind: CounterpartyKind.SUPPLIER });
+    prisma.supplier.findUnique.mockResolvedValue({ id: 's1', name: 'SKF ผู้ขายเดิม' });
+
+    await service.createDisposal(whActor, {
+      productId: 'p1',
+      quantity: 2,
+      disposalReasonId: 'r1',
+      counterpartyId: 's1',
+    });
+    const mv = prisma.returnStockMovement.create.mock.calls[0][0].data;
+    expect(mv.counterpartyType).toBe(CounterpartyType.SUPPLIER);
+    expect(mv.counterpartyName).toBe('SKF ผู้ขายเดิม');
+  });
+
+  it('เหตุผล kind=none → ไม่ต้องมีคู่ค้า', async () => {
+    const { service, prisma } = setup(20, { counterpartyKind: CounterpartyKind.NONE });
+    await service.createDisposal(whActor, { productId: 'p1', quantity: 2, disposalReasonId: 'r1' });
+    const mv = prisma.returnStockMovement.create.mock.calls[0][0].data;
+    expect(mv.counterpartyType).toBeNull();
+    expect(mv.counterpartyName).toBeNull();
+  });
+
+  it('เหตุผลต้องมีคู่ค้าแต่ไม่ระบุ → BadRequest', async () => {
+    const { service } = setup(20, { counterpartyKind: CounterpartyKind.BUYER });
+    await expect(
+      service.createDisposal(whActor, { productId: 'p1', quantity: 2, disposalReasonId: 'r1' }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('เหตุผล inactive → BadRequest', async () => {
+    const { service } = setup(20, { counterpartyKind: CounterpartyKind.BUYER, isActive: false });
+    await expect(
+      service.createDisposal(whActor, {
+        productId: 'p1',
+        quantity: 2,
+        disposalReasonId: 'r1',
+        counterpartyName: 'x',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('ผู้ไม่มีสิทธิ์ disposal → Forbidden', async () => {
+    const { service } = makeService();
+    await expect(
+      service.createDisposal(salesActor, { productId: 'p1', quantity: 1, disposalReasonId: 'r1' }),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+});
+
+describe('ReturnsDiscountService.listStockBalances (Flow D)', () => {
+  it('รวม movements เป็นคงเหลือต่อสินค้า/รุ่น + กรองคงเหลือ>0', async () => {
+    const { service, prisma } = makeService();
+    prisma.returnStockMovement.groupBy.mockResolvedValue([
+      { productId: 'p1', productModelId: null, _sum: { quantityChange: 13 } },
+      { productId: 'p2', productModelId: 'm1', _sum: { quantityChange: 0 } },
+    ]);
+    prisma.product.findUnique.mockImplementation((args: { where: { id: string } }) =>
+      Promise.resolve({ id: args.where.id, name: args.where.id === 'p1' ? 'แบตเตอรี่' : 'ถังทินเนอร์' }),
+    );
+    prisma.productModel.findUnique.mockResolvedValue({ id: 'm1', name: 'รุ่น A' });
+
+    const inStock = await service.listStockBalances(true);
+    expect(inStock).toHaveLength(1);
+    expect(inStock[0]).toMatchObject({ productId: 'p1', balance: 13 });
+
+    const all = await service.listStockBalances(false);
+    expect(all).toHaveLength(2);
   });
 });

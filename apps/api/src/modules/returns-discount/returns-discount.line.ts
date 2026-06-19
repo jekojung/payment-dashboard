@@ -1,8 +1,12 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import type { PostbackEvent } from '@line/bot-sdk';
+import { Permissions } from '@tpg/shared';
 import { LineService } from '../../core/line/line.service';
 import { LineEventHandlerService } from '../../core/line/line-event-handler.service';
 import { ReturnsDiscountService } from './returns-discount.service';
+import { buildStockSummaryFlex } from './returns-discount.flex';
+
+const P = Permissions.RETURNS_DISCOUNT;
 
 /** parse postback data รูปแบบ "action=...&itemId=..." */
 function parsePostback(data: string): Record<string, string> {
@@ -26,9 +30,19 @@ export class ReturnsDiscountLineHandler implements OnModuleInit {
   ) {}
 
   onModuleInit(): void {
-    // เมนู rich menu "แจ้งส่วนลด" → ตอบลิงก์ LIFF (ฟอร์มจริงในขั้นเว็บ/LIFF)
+    // เมนู rich menu ฝ่ายขาย/คลัง → ตอบลิงก์ LIFF (ฟอร์มจริงในขั้นเว็บ/LIFF)
     this.events.registerPostbackHandler('returns_discount:create', async (event) => {
-      await this.replyCreateForm(event);
+      await this.replyFormLink(event, 'แจ้งส่วนลดรับเทิร์นสินค้า', 'create');
+    });
+    this.events.registerPostbackHandler('returns_discount:receive', async (event) => {
+      await this.replyFormLink(event, 'บันทึกรับสินค้าเทิร์น', 'receive');
+    });
+    this.events.registerPostbackHandler('returns_discount:disposal', async (event) => {
+      await this.replyFormLink(event, 'ตัดจำหน่ายสินค้ารับเทิร์น', 'disposal');
+    });
+    // ตรวจสอบสต็อก → ตอบ Flex สรุปคงเหลือทันที (Flow D)
+    this.events.registerPostbackHandler('returns_discount:stock_check', async (event) => {
+      await this.replyStockSummary(event);
     });
 
     this.events.registerPostbackHandler('rd_approve', async (event) => {
@@ -61,13 +75,28 @@ export class ReturnsDiscountLineHandler implements OnModuleInit {
     });
   }
 
-  private async replyCreateForm(event: PostbackEvent) {
+  private async replyFormLink(event: PostbackEvent, title: string, formKey: string) {
     const liffId = process.env.LIFF_ID;
-    const url = liffId ? `https://liff.line.me/${liffId}` : '(ยังไม่ได้ตั้งค่า LIFF_ID)';
-    await this.line.replyText(
-      event.replyToken,
-      `แจ้งส่วนลดรับเทิร์นสินค้า\nกรอกแบบฟอร์มที่นี่:\n${url}`,
-    );
+    const url = liffId
+      ? `https://liff.line.me/${liffId}?form=${formKey}`
+      : '(ยังไม่ได้ตั้งค่า LIFF_ID)';
+    await this.line.replyText(event.replyToken, `${title}\nกรอกแบบฟอร์มที่นี่:\n${url}`);
+  }
+
+  private async replyStockSummary(event: PostbackEvent) {
+    const lineUserId = event.source.userId;
+    if (!lineUserId) return;
+    const actor = await this.service.actorFromLineUserId(lineUserId);
+    if (!actor) {
+      await this.line.replyText(event.replyToken, 'ไม่พบบัญชีของคุณในระบบ');
+      return;
+    }
+    if (!actor.isSystemAdmin && !actor.permissions.includes(P.VIEW)) {
+      await this.line.replyText(event.replyToken, 'คุณไม่มีสิทธิ์ดูสต็อก');
+      return;
+    }
+    const balances = await this.service.listStockBalances(true);
+    await this.line.replyFlex(event.replyToken, 'สต็อกสินค้ารับเทิร์น', buildStockSummaryFlex(balances));
   }
 
   private async handleApprove(event: PostbackEvent) {

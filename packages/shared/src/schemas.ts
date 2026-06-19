@@ -124,3 +124,18 @@ export const receiveItemSchema = z.object({
   receivedQuantity: z.coerce.number().int().positive('จำนวนที่รับต้องมากกว่า 0'),
 });
 export type ReceiveItemInput = z.infer<typeof receiveItemSchema>;
+
+// ---------- โมดูล 1: Flow C (ตัดจำหน่ายสินค้ารับเทิร์น) ----------
+/**
+ * คลังตัดจำหน่ายสต็อก: เลือกสินค้า+รุ่น (คงเหลือ>0), จำนวน (≤คงเหลือ), เหตุผล,
+ * และคู่ค้าปลายทางตามชนิดของเหตุผล (เลือกจาก master ด้วย id หรือพิมพ์ชื่อใหม่)
+ */
+export const createDisposalSchema = z.object({
+  productId: z.string().min(1, 'กรุณาเลือกสินค้า'),
+  productModelId: z.string().nullable().optional(),
+  quantity: z.number().int().positive('จำนวนที่ตัดต้องมากกว่า 0'),
+  disposalReasonId: z.string().min(1, 'กรุณาเลือกเหตุผล'),
+  counterpartyId: z.string().nullable().optional(),
+  counterpartyName: z.string().optional(),
+});
+export type CreateDisposalInput = z.infer<typeof createDisposalSchema>;

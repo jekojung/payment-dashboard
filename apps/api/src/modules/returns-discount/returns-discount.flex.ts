@@ -154,6 +154,79 @@ export function buildApprovalRequestFlex(s: ItemSummary & { itemId: string; sale
   };
 }
 
+/** ผลลัพธ์: ตัดจำหน่ายสำเร็จ (Flow C) */
+export function buildDisposalSuccessFlex(d: {
+  productName: string;
+  modelName?: string | null;
+  quantity: number;
+  reasonName: string;
+  counterpartyName?: string | null;
+  balanceAfter: number;
+}) {
+  const product = d.modelName ? `${d.productName} (${d.modelName})` : d.productName;
+  const rows = [
+    row('สินค้า', product),
+    row('จำนวนที่ตัด', `${d.quantity.toLocaleString('th-TH')} หน่วย`),
+    row('เหตุผล', d.reasonName),
+  ];
+  if (d.counterpartyName) rows.push(row('คู่ค้าปลายทาง', d.counterpartyName));
+  rows.push({ type: 'separator', margin: 'md' } as never);
+  rows.push(row('คงเหลือใหม่', `${d.balanceAfter.toLocaleString('th-TH')} หน่วย`, '#111111'));
+
+  return {
+    type: 'bubble',
+    header: {
+      type: 'box',
+      layout: 'vertical',
+      backgroundColor: '#0EA5E9',
+      contents: [
+        { type: 'text', text: '✅ ตัดจำหน่ายสำเร็จ', color: '#FFFFFF', weight: 'bold', size: 'lg' },
+      ],
+    },
+    body: { type: 'box', layout: 'vertical', spacing: 'sm', contents: rows },
+    footer: {
+      type: 'box',
+      layout: 'vertical',
+      contents: [
+        {
+          type: 'text',
+          text: 'ผู้บริหารจะบันทึกมูลค่าขายภายหลัง',
+          size: 'xs',
+          color: '#888888',
+          align: 'center',
+        },
+      ],
+    },
+  };
+}
+
+/** สรุปยอดคงเหลือสต็อกรับเทิร์น (Flow D) */
+export function buildStockSummaryFlex(
+  balances: { productName: string; modelName?: string | null; balance: number }[],
+) {
+  const lines =
+    balances.length === 0
+      ? [{ type: 'text', text: 'ไม่มีสินค้าคงเหลือ', size: 'sm', color: '#888888' }]
+      : balances.slice(0, 20).map((b) =>
+          row(
+            b.modelName ? `${b.productName} (${b.modelName})` : b.productName,
+            `${b.balance.toLocaleString('th-TH')} หน่วย`,
+          ),
+        );
+  return {
+    type: 'bubble',
+    header: {
+      type: 'box',
+      layout: 'vertical',
+      backgroundColor: '#334155',
+      contents: [
+        { type: 'text', text: '📊 สต็อกสินค้ารับเทิร์น', color: '#FFFFFF', weight: 'bold', size: 'lg' },
+      ],
+    },
+    body: { type: 'box', layout: 'vertical', spacing: 'sm', contents: lines },
+  };
+}
+
 /** แจ้งผลอนุมัติ/ปฏิเสธกลับฝ่ายขาย */
 export function buildApprovalResultFlex(opts: {
   approved: boolean;

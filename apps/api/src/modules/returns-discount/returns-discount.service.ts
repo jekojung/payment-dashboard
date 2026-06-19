@@ -8,12 +8,16 @@ import {
 import { Prisma } from '@prisma/client';
 import {
   ApprovalStatus,
+  CounterpartyKind,
+  CounterpartyType,
   DiscountStatus,
   NotificationChannel,
   Permissions,
   ReceiptStatus,
   ReturnDocumentStatus,
+  SaleValueStatus,
   StockMovementType,
+  type CreateDisposalInput,
   type CreateReturnDiscountInput,
 } from '@tpg/shared';
 import type { AuthUser } from '../../common/auth-user';
@@ -26,6 +30,7 @@ import { LineService } from '../../core/line/line.service';
 import {
   buildApprovalRequestFlex,
   buildApprovalResultFlex,
+  buildDisposalSuccessFlex,
   buildPendingApprovalFlex,
   buildWithinStandardFlex,
 } from './returns-discount.flex';
@@ -435,6 +440,186 @@ export class ReturnsDiscountService {
       channel: NotificationChannel.WEB,
       title,
       body,
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Flow C — ตัดจำหน่ายสินค้ารับเทิร์น
+  // ---------------------------------------------------------------------------
+
+  async createDisposal(actor: Actor, input: CreateDisposalInput) {
+    if (!actor.isSystemAdmin && !actor.permissions.includes(P.DISPOSAL)) {
+      throw new ForbiddenException('ไม่มีสิทธิ์ตัดจำหน่ายสินค้า');
+    }
+
+    const product = await this.prisma.product.findUnique({ where: { id: input.productId } });
+    if (!product) throw new NotFoundException('ไม่พบสินค้าที่เลือก');
+
+    const modelId = input.productModelId ?? null;
+    let model = null;
+    if (modelId) {
+      model = await this.prisma.productModel.findUnique({ where: { id: modelId } });
+      if (!model || model.productId !== product.id) {
+        throw new BadRequestException('รุ่นสินค้าไม่ถูกต้อง');
+      }
+    } else if (product.hasModels) {
+      throw new BadRequestException('สินค้านี้ต้องระบุรุ่น');
+    }
+
+    const reason = await this.prisma.disposalReason.findUnique({
+      where: { id: input.disposalReasonId },
+    });
+    if (!reason || !reason.isActive) {
+      throw new BadRequestException('เหตุผลตัดจำหน่ายไม่ถูกต้อง');
+    }
+
+    // validate จำนวนที่ตัด ≤ คงเหลือ
+    const balanceBefore = await this.getBalance(product.id, modelId);
+    if (input.quantity > balanceBefore) {
+      throw new BadRequestException(
+        `จำนวนที่ตัด (${input.quantity}) เกินคงเหลือ (${balanceBefore})`,
+      );
+    }
+
+    const cp = await this.resolveCounterparty(reason.counterpartyKind, input);
+
+    const movement = await this.prisma.returnStockMovement.create({
+      data: {
+        productId: product.id,
+        productModelId: modelId,
+        quantityChange: -input.quantity,
+        movementType: StockMovementType.DISPOSAL,
+        disposalReasonId: reason.id,
+        counterpartyType: cp.counterpartyType,
+        counterpartyId: cp.counterpartyId,
+        counterpartyName: cp.counterpartyName,
+        saleValueStatus: SaleValueStatus.PENDING, // ผู้บริหารบันทึกมูลค่าขายภายหลัง
+        createdById: actor.id,
+      },
+    });
+
+    await this.audit.log({
+      userId: actor.id,
+      moduleKey: MODULE_KEY,
+      action: 'stock.disposal',
+      entity: 'return_stock_movement',
+      entityId: movement.id,
+      payload: {
+        productId: product.id,
+        productModelId: modelId,
+        quantity: input.quantity,
+        reason: reason.name,
+        counterpartyType: cp.counterpartyType,
+        counterpartyName: cp.counterpartyName,
+      },
+    });
+
+    await this.notifyDisposalPendingSaleValue(reason.name, product.name, input.quantity);
+
+    const balanceAfter = balanceBefore - input.quantity;
+    return {
+      movement,
+      balanceBefore,
+      balanceAfter,
+      flex: buildDisposalSuccessFlex({
+        productName: product.name,
+        modelName: model?.name ?? null,
+        quantity: input.quantity,
+        reasonName: reason.name,
+        counterpartyName: cp.counterpartyName,
+        balanceAfter,
+      }),
+    };
+  }
+
+  /** กำหนดคู่ค้าปลายทางตามชนิดของเหตุผล (supplier/buyer/none) */
+  private async resolveCounterparty(kind: string, input: CreateDisposalInput) {
+    if (kind === CounterpartyKind.NONE) {
+      return { counterpartyType: null, counterpartyId: null, counterpartyName: null };
+    }
+    const type =
+      kind === CounterpartyKind.SUPPLIER ? CounterpartyType.SUPPLIER : CounterpartyType.BUYER;
+
+    let id = input.counterpartyId ?? null;
+    let name = input.counterpartyName?.trim() || null;
+
+    if (id) {
+      if (type === CounterpartyType.SUPPLIER) {
+        const s = await this.prisma.supplier.findUnique({ where: { id } });
+        if (!s) throw new BadRequestException('ไม่พบผู้ขายเดิมที่เลือก');
+        name = s.name;
+      } else {
+        const b = await this.prisma.buyer.findUnique({ where: { id } });
+        if (!b) throw new BadRequestException('ไม่พบผู้รับซื้อที่เลือก');
+        name = b.name;
+      }
+    }
+    if (!id && !name) {
+      throw new BadRequestException('กรุณาระบุคู่ค้าปลายทาง');
+    }
+    return { counterpartyType: type, counterpartyId: id, counterpartyName: name };
+  }
+
+  private async notifyDisposalPendingSaleValue(
+    reasonName: string,
+    productName: string,
+    quantity: number,
+  ) {
+    const execs = await this.rbac.findUsersWithPermission(P.SET_SALE_VALUE);
+    await Promise.all(
+      execs.map((u) =>
+        this.notifications.notify({
+          userId: u.id,
+          channel: NotificationChannel.WEB,
+          title: '💰 รายการตัดจำหน่ายรอบันทึกมูลค่าขาย',
+          body: `${productName} จำนวน ${quantity} (${reasonName})`,
+        }),
+      ),
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Flow D — ตรวจสอบสต็อกสินค้ารับเทิร์น
+  // ---------------------------------------------------------------------------
+
+  /** ยอดคงเหลือต่อ (สินค้า/รุ่น) จากผลรวม movements */
+  async listStockBalances(onlyInStock = true) {
+    const groups = await this.prisma.returnStockMovement.groupBy({
+      by: ['productId', 'productModelId'],
+      _sum: { quantityChange: true },
+    });
+
+    const rows = await Promise.all(
+      groups.map(async (g) => {
+        const balance = g._sum.quantityChange ?? 0;
+        const product = await this.prisma.product.findUnique({ where: { id: g.productId } });
+        const model = g.productModelId
+          ? await this.prisma.productModel.findUnique({ where: { id: g.productModelId } })
+          : null;
+        return {
+          productId: g.productId,
+          productName: product?.name ?? g.productId,
+          productModelId: g.productModelId,
+          modelName: model?.name ?? null,
+          balance,
+        };
+      }),
+    );
+
+    return rows
+      .filter((r) => (onlyInStock ? r.balance > 0 : true))
+      .sort((a, b) => a.productName.localeCompare(b.productName, 'th'));
+  }
+
+  /** ประวัติการเคลื่อนไหว (ledger) ของ (สินค้า/รุ่น) */
+  getLedger(productId: string, productModelId: string | null) {
+    return this.prisma.returnStockMovement.findMany({
+      where: { productId, productModelId: productModelId ?? null },
+      orderBy: { createdAt: 'desc' },
+      include: {
+        disposalReason: true,
+        createdBy: { select: { name: true, employeeCode: true } },
+      },
     });
   }
 

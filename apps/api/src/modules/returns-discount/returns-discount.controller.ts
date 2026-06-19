@@ -11,9 +11,11 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import {
   Permissions,
+  createDisposalSchema,
   createReturnDiscountSchema,
   receiveItemSchema,
   rejectReturnItemSchema,
+  type CreateDisposalInput,
   type CreateReturnDiscountInput,
   type RejectReturnItemInput,
 } from '@tpg/shared';
@@ -112,5 +114,33 @@ export class ReturnsDiscountController {
     @UploadedFile() photo?: UploadedPhoto,
   ) {
     return this.service.receiveItem(user, id, body.receivedQuantity, photo);
+  }
+
+  // ---------- Flow C: ตัดจำหน่าย ----------
+
+  /** ตัดจำหน่ายสต็อก (validate ≤ คงเหลือ, บันทึกเหตุผล + คู่ค้าปลายทาง) */
+  @Post('disposals')
+  @RequirePermissions(P.DISPOSAL)
+  dispose(
+    @CurrentUser() user: AuthUser,
+    @Body(new ZodValidationPipe(createDisposalSchema)) body: CreateDisposalInput,
+  ) {
+    return this.service.createDisposal(user, body);
+  }
+
+  // ---------- Flow D: ตรวจสอบสต็อก ----------
+
+  /** ยอดคงเหลือต่อ (สินค้า/รุ่น); ?all=true เพื่อรวมที่คงเหลือ 0 */
+  @Get('stock')
+  @RequirePermissions(P.VIEW)
+  stock(@Query('all') all?: string) {
+    return this.service.listStockBalances(all !== 'true');
+  }
+
+  /** ประวัติการเคลื่อนไหวของสินค้า/รุ่น */
+  @Get('stock/ledger')
+  @RequirePermissions(P.VIEW)
+  ledger(@Query('productId') productId: string, @Query('productModelId') productModelId?: string) {
+    return this.service.getLedger(productId, productModelId ?? null);
   }
 }
