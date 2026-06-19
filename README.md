@@ -124,11 +124,26 @@ pnpm dev
 | Google Drive | `GOOGLE_SERVICE_ACCOUNT_JSON` / `GOOGLE_SERVICE_ACCOUNT_JSON_PATH`, `GDRIVE_FOLDER_ID` |
 | Web | `VITE_API_BASE_URL` |
 
-### ตั้งค่า LINE Webhook (จะ implement ในขั้นที่ 4)
+### ตั้งค่า LINE Webhook
 
 1. สร้าง Messaging API channel ใน [LINE Developers Console](https://developers.line.biz/)
 2. นำ `Channel access token` และ `Channel secret` ใส่ `.env`
 3. ตั้ง Webhook URL = `{API_BASE_URL}/line/webhook` แล้วเปิด **Use webhook**
+
+> **โหมดการทำงาน:**
+> - **ไม่ได้ตั้ง** `LINE_CHANNEL_ACCESS_TOKEN`/`LINE_CHANNEL_SECRET` → webhook รันแบบ dev-mode (ข้าม verify signature, push/reply เป็น log) — เหมาะกับการพัฒนา local
+> - **ตั้งแล้ว** → ตรวจ HMAC-SHA256 signature จริง + push/reply ผ่าน LINE API + สร้าง rich menu ตามบทบาท
+>
+> **คำสั่งใน LINE OA:**
+> - `ผูกบัญชี {รหัสพนักงาน}` — ผูกบัญชี LINE เข้ากับพนักงาน (เช่น `ผูกบัญชี SALE001`) + กำหนด rich menu อัตโนมัติตามบทบาท
+> - `ช่วยเหลือ` — แสดงคำแนะนำ
+>
+> **Rich menu:** สร้างอัตโนมัติตอน startup 3 กลุ่ม (sales / warehouse / default)
+> ต้องอัปโหลดรูป 2500×843 px ผ่าน `POST https://api-data.line.me/v2/bot/richmenu/{richMenuId}/content` จึงจะแสดงผล (ดู log ตอน startup สำหรับ richMenuId)
+>
+> **หมายเหตุ (remote/sandbox):** หากรันใน environment ที่จำกัด network egress ต้องอนุญาตโฮสต์
+> `api.line.me` และ `api-data.line.me` ด้วย มิฉะนั้นการสร้าง rich menu / push จะได้ `403 Host not in allowlist`
+> (การ verify signature ของ webhook ทำงานได้โดยไม่ต้องต่อ network)
 
 ### ตั้งค่า LIFF (จะ implement ในขั้นที่ 4-7)
 
@@ -167,7 +182,7 @@ pnpm dev
 | 1 | Monorepo + tooling + `.env.example` + README | ✅ เสร็จ |
 | 2 | Prisma schema (core + โมดูล 1 รวม stock + disposal) + migration | ✅ เสร็จ (migration `init` ใช้แล้ว) |
 | 3 | Core: auth, RBAC, users, registry, audit, attachments, notifications, masterdata | ✅ เสร็จ (API + เทสต์) |
-| 4 | LINE core: webhook + line-binding + dynamic rich menu | ⏳ |
+| 4 | LINE core: webhook + line-binding + dynamic rich menu | ✅ เสร็จ (verify signature ทดสอบกับ secret จริงแล้ว) |
 | 5 | โมดูล 1 — Flow A (แจ้งส่วนลด + อนุมัติพิเศษ) | ⏳ |
 | 6 | โมดูล 1 — Flow B (รับเข้า + Google Drive + stock movement) | ⏳ |
 | 7 | โมดูล 1 — Flow C (ตัดจำหน่าย) + Flow D (ตรวจสต็อก) | ⏳ |
