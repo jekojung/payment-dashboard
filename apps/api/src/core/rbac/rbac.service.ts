@@ -44,4 +44,27 @@ export class RbacService {
     if (required.length === 0) return true;
     return required.every((p) => access.permissions.includes(p));
   }
+
+  /**
+   * หาผู้ใช้ที่ active และมีสิทธิ์ที่กำหนด (รวม system_admin ที่ผ่านทุกสิทธิ์)
+   * ใช้ส่ง notification/Flex ให้กลุ่มผู้มีสิทธิ์ เช่น ผู้อนุมัติพิเศษ / คลัง
+   */
+  findUsersWithPermission(permission: string) {
+    return this.prisma.user.findMany({
+      where: {
+        isActive: true,
+        userRoles: {
+          some: {
+            role: {
+              OR: [
+                { key: RoleKey.SYSTEM_ADMIN },
+                { rolePermissions: { some: { permission: { key: permission } } } },
+              ],
+            },
+          },
+        },
+      },
+      select: { id: true, name: true, lineUserId: true },
+    });
+  }
 }

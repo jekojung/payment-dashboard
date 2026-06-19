@@ -109,6 +109,19 @@ pnpm dev
 | `GET /attachments` | (token) | ไฟล์แนบของ owner |
 | `GET /audit` | `core:view_audit` | audit log |
 
+### API โมดูล 1 — Flow A (ขั้นที่ 5)
+
+| method · path | สิทธิ์ | หมายเหตุ |
+|---|---|---|
+| `POST /returns-discount/items` | `returns_discount:create` | ฝ่ายขายแจ้งส่วนลด (เทียบมาตรฐาน → in/over อัตโนมัติ) |
+| `GET /returns-discount/standards/compare` | `returns_discount:create` | preview ผลเทียบก่อนยืนยัน (ใช้ใน LIFF) |
+| `GET /returns-discount/items/pending-approvals` | `returns_discount:approve_special` | รายการรออนุมัติพิเศษ |
+| `POST /returns-discount/items/:id/approve` | `returns_discount:approve_special` | อนุมัติ → แจ้งฝ่ายขาย/คลัง |
+| `POST /returns-discount/items/:id/reject` | `returns_discount:approve_special` | ปฏิเสธ (ต้องมีเหตุผล) → แจ้งฝ่ายขาย |
+| `GET /returns-discount/documents` | `returns_discount:view` | รายการใบ GD (เต็มในขั้นที่ 9) |
+
+> **LINE (Flow A):** หัวหน้าได้ Flex card อนุมัติ/ปฏิเสธผ่าน push; กดปุ่ม postback → อนุมัติทันที หรือกดปฏิเสธแล้วพิมพ์เหตุผลตามมา; ผลแจ้งกลับฝ่ายขายเป็น Flex
+
 ---
 
 ## Environment Variables
@@ -183,7 +196,7 @@ pnpm dev
 | 2 | Prisma schema (core + โมดูล 1 รวม stock + disposal) + migration | ✅ เสร็จ (migration `init` ใช้แล้ว) |
 | 3 | Core: auth, RBAC, users, registry, audit, attachments, notifications, masterdata | ✅ เสร็จ (API + เทสต์) |
 | 4 | LINE core: webhook + line-binding + dynamic rich menu | ✅ เสร็จ (verify signature ทดสอบกับ secret จริงแล้ว) |
-| 5 | โมดูล 1 — Flow A (แจ้งส่วนลด + อนุมัติพิเศษ) | ⏳ |
+| 5 | โมดูล 1 — Flow A (แจ้งส่วนลด + อนุมัติพิเศษ) | ✅ เสร็จ (REST + Flex + postback + เทสต์ 12) |
 | 6 | โมดูล 1 — Flow B (รับเข้า + Google Drive + stock movement) | ⏳ |
 | 7 | โมดูล 1 — Flow C (ตัดจำหน่าย) + Flow D (ตรวจสต็อก) | ⏳ |
 | 8 | Web: dashboard shell + login + nav | ⏳ |

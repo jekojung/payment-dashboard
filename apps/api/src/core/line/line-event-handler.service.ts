@@ -7,11 +7,14 @@ import { PrismaService } from '../../prisma/prisma.service';
 
 type TextMessageEvent = MessageEvent & { message: { type: 'text'; text: string } };
 type PostbackHandlerFn = (event: PostbackEvent) => Promise<void>;
+/** คืน true ถ้าจัดการข้อความนี้แล้ว (จะหยุด pipeline) */
+type TextHandlerFn = (event: TextMessageEvent) => Promise<boolean>;
 
 @Injectable()
 export class LineEventHandlerService {
   private readonly logger = new Logger(LineEventHandlerService.name);
   private readonly postbackHandlers = new Map<string, PostbackHandlerFn>();
+  private readonly textHandlers: TextHandlerFn[] = [];
 
   constructor(
     private readonly lineService: LineService,
@@ -27,6 +30,15 @@ export class LineEventHandlerService {
   registerPostbackHandler(actionPrefix: string, handler: PostbackHandlerFn): void {
     this.postbackHandlers.set(actionPrefix, handler);
     this.logger.log(`Postback handler registered: ${actionPrefix}`);
+  }
+
+  /**
+   * โมดูลธุรกิจลงทะเบียน text handler สำหรับ free-text ที่ไม่ใช่คำสั่ง core
+   * (เช่น รับ "เหตุผลการปฏิเสธ" ต่อจากการกดปุ่มปฏิเสธ) — รันตามลำดับจนกว่าจะมีตัว return true
+   */
+  registerTextHandler(handler: TextHandlerFn): void {
+    this.textHandlers.push(handler);
+    this.logger.log(`Text handler registered (total ${this.textHandlers.length})`);
   }
 
   async handle(event: WebhookEvent): Promise<void> {
@@ -82,6 +94,11 @@ export class LineEventHandlerService {
     if (bindMatch) {
       await this.handleBindingRequest(event.replyToken, lineUserId, bindMatch[1].toUpperCase());
       return;
+    }
+
+    // โมดูลธุรกิจอาจรอ free-text อยู่ (เช่น เหตุผลการปฏิเสธ) — ให้สิทธิ์ก่อนคำสั่งทั่วไป
+    for (const handler of this.textHandlers) {
+      if (await handler(event)) return;
     }
 
     if (/^(ช่วยเหลือ|help|เมนู|menu)$/i.test(text)) {

@@ -98,3 +98,22 @@ export const markReadSchema = z.object({
   all: z.boolean().optional(),
 });
 export type MarkReadInput = z.infer<typeof markReadSchema>;
+
+// ---------- โมดูล 1: Flow A (แจ้งส่วนลดรับเทิร์น) ----------
+/** ฟอร์ม LIFF ฝ่ายขายแจ้งส่วนลด (1 รายการ/ครั้ง; 1 ใบ GD มีได้หลายรายการ) */
+export const createReturnDiscountSchema = z.object({
+  customerCode: z.string().min(1, 'กรุณาระบุรหัสลูกค้า'),
+  customerName: z.string().optional(),
+  gdNumber: z.string().min(1, 'กรุณาระบุเลขที่ใบ GD'),
+  productId: z.string().min(1, 'กรุณาเลือกสินค้า'),
+  productModelId: z.string().nullable().optional(),
+  declaredQuantity: z.number().int().positive('จำนวนต้องมากกว่า 0'),
+  discountPerUnit: z.number().nonnegative('ส่วนลดต้องไม่ติดลบ'),
+});
+export type CreateReturnDiscountInput = z.infer<typeof createReturnDiscountSchema>;
+
+/** ปฏิเสธการอนุมัติพิเศษ (ต้องมีเหตุผล) */
+export const rejectReturnItemSchema = z.object({
+  reason: z.string().min(1, 'กรุณาระบุเหตุผลการปฏิเสธ'),
+});
+export type RejectReturnItemInput = z.infer<typeof rejectReturnItemSchema>;
