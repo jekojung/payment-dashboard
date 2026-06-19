@@ -258,11 +258,24 @@ export class ReturnsDiscountService {
     });
   }
 
-  /** รายการใบ GD (เบื้องต้น — หน้าเว็บเต็มในขั้นที่ 9) */
-  listDocuments() {
+  /** รายการใบ GD (filter: สถานะ, ลูกค้า, พนักงานขาย, ค้นเลข GD) */
+  listDocuments(filter?: {
+    status?: string;
+    customerCode?: string;
+    createdById?: string;
+    search?: string;
+  }) {
     return this.prisma.returnDocument.findMany({
+      where: {
+        ...(filter?.status ? { status: filter.status as ReturnDocumentStatus } : {}),
+        ...(filter?.customerCode ? { customerCode: filter.customerCode } : {}),
+        ...(filter?.createdById ? { createdById: filter.createdById } : {}),
+        ...(filter?.search
+          ? { gdNumber: { contains: filter.search, mode: 'insensitive' } }
+          : {}),
+      },
       orderBy: { createdAt: 'desc' },
-      take: 100,
+      take: 200,
       include: {
         createdBy: { select: { name: true, employeeCode: true } },
         items: { include: { product: true, productModel: true } },
@@ -621,6 +634,214 @@ export class ReturnsDiscountService {
         createdBy: { select: { name: true, employeeCode: true } },
       },
     });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Dashboard (เว็บ) — KPI / กราฟ / รายการตัดจำหน่าย / มูลค่าขาย
+  // ---------------------------------------------------------------------------
+
+  /** รายการตัดจำหน่าย (filter เหตุผล/สถานะมูลค่าขาย) */
+  listDisposals(filter?: { reasonId?: string; saleValueStatus?: string }) {
+    return this.prisma.returnStockMovement.findMany({
+      where: {
+        movementType: StockMovementType.DISPOSAL,
+        ...(filter?.reasonId ? { disposalReasonId: filter.reasonId } : {}),
+        ...(filter?.saleValueStatus
+          ? { saleValueStatus: filter.saleValueStatus as SaleValueStatus }
+          : {}),
+      },
+      orderBy: { createdAt: 'desc' },
+      include: {
+        product: true,
+        productModel: true,
+        disposalReason: true,
+        createdBy: { select: { name: true } },
+        saleValueBy: { select: { name: true } },
+      },
+    });
+  }
+
+  /** ผู้บริหารบันทึกมูลค่าขาย (pending → recorded) */
+  async setSaleValue(actor: Actor, movementId: string, saleValue: number) {
+    if (!actor.isSystemAdmin && !actor.permissions.includes(P.SET_SALE_VALUE)) {
+      throw new ForbiddenException('ไม่มีสิทธิ์บันทึกมูลค่าขาย');
+    }
+    const mv = await this.prisma.returnStockMovement.findUnique({ where: { id: movementId } });
+    if (!mv || mv.movementType !== StockMovementType.DISPOSAL) {
+      throw new NotFoundException('ไม่พบรายการตัดจำหน่าย');
+    }
+    const updated = await this.prisma.returnStockMovement.update({
+      where: { id: movementId },
+      data: {
+        saleValue,
+        saleValueStatus: SaleValueStatus.RECORDED,
+        saleValueById: actor.id,
+        saleValueAt: new Date(),
+      },
+    });
+    await this.audit.log({
+      userId: actor.id,
+      moduleKey: MODULE_KEY,
+      action: 'stock.disposal.set_sale_value',
+      entity: 'return_stock_movement',
+      entityId: movementId,
+      payload: { saleValue },
+    });
+    return updated;
+  }
+
+  /** รายละเอียดใบ GD (items + เทียบมาตรฐาน + รูปแนบ) */
+  async getDocument(id: string) {
+    const doc = await this.prisma.returnDocument.findUnique({
+      where: { id },
+      include: {
+        createdBy: { select: { name: true, employeeCode: true } },
+        items: {
+          orderBy: { createdAt: 'asc' },
+          include: {
+            product: true,
+            productModel: true,
+            approvedBy: { select: { name: true } },
+            receivedBy: { select: { name: true } },
+          },
+        },
+      },
+    });
+    if (!doc) throw new NotFoundException('ไม่พบใบ GD');
+
+    // แนบรูปของแต่ละ item
+    const itemIds = doc.items.map((i) => i.id);
+    const attachments = itemIds.length
+      ? await this.prisma.attachment.findMany({
+          where: { ownerType: 'return_item', ownerId: { in: itemIds } },
+        })
+      : [];
+    const byItem = new Map<string, typeof attachments>();
+    for (const a of attachments) {
+      const list = byItem.get(a.ownerId) ?? [];
+      list.push(a);
+      byItem.set(a.ownerId, list);
+    }
+    return {
+      ...doc,
+      items: doc.items.map((i) => ({ ...i, attachments: byItem.get(i.id) ?? [] })),
+    };
+  }
+
+  /** KPI + กราฟ สำหรับหน้า dashboard โมดูล 1 */
+  async getDashboard() {
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+
+    const [items, movements, disposalReasons] = await Promise.all([
+      this.prisma.returnItem.findMany({
+        include: {
+          product: true,
+          productModel: true,
+          returnDocument: { include: { createdBy: { select: { name: true } } } },
+        },
+      }),
+      this.prisma.returnStockMovement.findMany({ include: { disposalReason: true } }),
+      this.prisma.disposalReason.findMany(),
+    ]);
+
+    const notRejected = items.filter((i) => i.approvalStatus !== ApprovalStatus.REJECTED);
+    const num = (d: Prisma.Decimal | number) => Number(d);
+
+    // ----- KPI -----
+    const totalDiscountThisMonth = notRejected
+      .filter((i) => i.createdAt >= monthStart)
+      .reduce((s, i) => s + num(i.totalDiscount), 0);
+
+    const gdPendingReceiptDocs = new Set(
+      notRejected
+        .filter(
+          (i) =>
+            i.receiptStatus === ReceiptStatus.PENDING_RECEIPT &&
+            (i.approvalStatus === ApprovalStatus.NOT_REQUIRED ||
+              i.approvalStatus === ApprovalStatus.APPROVED),
+        )
+        .map((i) => i.returnDocumentId),
+    );
+
+    const pendingApprovals = items.filter(
+      (i) => i.approvalStatus === ApprovalStatus.PENDING,
+    ).length;
+    const mismatchCount = items.filter((i) => i.qtyMismatch).length;
+
+    const disposals = movements.filter((m) => m.movementType === StockMovementType.DISPOSAL);
+    const totalStockBalance = movements.reduce((s, m) => s + m.quantityChange, 0);
+    const disposalPendingSaleValue = disposals.filter(
+      (m) => m.saleValueStatus === SaleValueStatus.PENDING,
+    ).length;
+    const totalSaleValueRecorded = disposals
+      .filter((m) => m.saleValueStatus === SaleValueStatus.RECORDED)
+      .reduce((s, m) => s + num(m.saleValue ?? 0), 0);
+
+    // ----- กราฟ -----
+    const sumBy = <T>(arr: T[], key: (t: T) => string, val: (t: T) => number) => {
+      const map = new Map<string, number>();
+      for (const t of arr) map.set(key(t), (map.get(key(t)) ?? 0) + val(t));
+      return [...map.entries()].map(([name, value]) => ({ name, value }));
+    };
+
+    const discountByProduct = sumBy(
+      notRejected,
+      (i) => (i.productModel ? `${i.product.name} (${i.productModel.name})` : i.product.name),
+      (i) => num(i.totalDiscount),
+    );
+    const discountBySales = sumBy(
+      notRejected,
+      (i) => i.returnDocument.createdBy.name,
+      (i) => num(i.totalDiscount),
+    );
+
+    // แนวโน้มส่วนลด 30 วันล่าสุด
+    const dayKey = (d: Date) => d.toISOString().slice(0, 10);
+    const trendMap = new Map<string, number>();
+    for (let k = 29; k >= 0; k--) {
+      const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - k);
+      trendMap.set(dayKey(d), 0);
+    }
+    for (const i of notRejected) {
+      const key = dayKey(i.createdAt);
+      if (trendMap.has(key)) trendMap.set(key, trendMap.get(key)! + num(i.totalDiscount));
+    }
+    const discountTrend = [...trendMap.entries()].map(([name, value]) => ({ name, value }));
+
+    // ตัดจำหน่ายแยกเหตุผล (จำนวน + มูลค่าขายที่บันทึกแล้ว)
+    const reasonName = new Map(disposalReasons.map((r) => [r.id, r.name]));
+    const disposalByReasonMap = new Map<string, { quantity: number; saleValue: number }>();
+    for (const m of disposals) {
+      const name = m.disposalReasonId
+        ? reasonName.get(m.disposalReasonId) ?? 'อื่นๆ'
+        : 'อื่นๆ';
+      const cur = disposalByReasonMap.get(name) ?? { quantity: 0, saleValue: 0 };
+      cur.quantity += Math.abs(m.quantityChange);
+      cur.saleValue += num(m.saleValue ?? 0);
+      disposalByReasonMap.set(name, cur);
+    }
+    const disposalByReason = [...disposalByReasonMap.entries()].map(([name, v]) => ({
+      name,
+      quantity: v.quantity,
+      saleValue: v.saleValue,
+    }));
+
+    return {
+      kpis: {
+        totalDiscountThisMonth,
+        gdPendingReceipt: gdPendingReceiptDocs.size,
+        pendingApprovals,
+        mismatchCount,
+        totalStockBalance,
+        disposalPendingSaleValue,
+        totalSaleValueRecorded,
+        disposalThisMonthQuantity: disposals
+          .filter((m) => m.createdAt >= monthStart)
+          .reduce((s, m) => s + Math.abs(m.quantityChange), 0),
+      },
+      charts: { discountByProduct, discountBySales, discountTrend, disposalByReason },
+    };
   }
 
   // ---------------------------------------------------------------------------

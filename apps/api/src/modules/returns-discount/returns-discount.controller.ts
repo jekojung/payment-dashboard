@@ -15,6 +15,7 @@ import {
   createReturnDiscountSchema,
   receiveItemSchema,
   rejectReturnItemSchema,
+  setSaleValueSchema,
   type CreateDisposalInput,
   type CreateReturnDiscountInput,
   type RejectReturnItemInput,
@@ -87,11 +88,30 @@ export class ReturnsDiscountController {
     return this.service.rejectItem(user, id, body.reason);
   }
 
-  /** รายการใบ GD (เบื้องต้น) */
+  /** รายการใบ GD (filter ผ่าน query) */
   @Get('documents')
   @RequirePermissions(P.VIEW)
-  documents() {
-    return this.service.listDocuments();
+  documents(
+    @Query('status') status?: string,
+    @Query('customerCode') customerCode?: string,
+    @Query('createdById') createdById?: string,
+    @Query('search') search?: string,
+  ) {
+    return this.service.listDocuments({ status, customerCode, createdById, search });
+  }
+
+  /** รายละเอียดใบ GD */
+  @Get('documents/:id')
+  @RequirePermissions(P.VIEW)
+  document(@Param('id') id: string) {
+    return this.service.getDocument(id);
+  }
+
+  /** KPI + กราฟ หน้า dashboard */
+  @Get('dashboard')
+  @RequirePermissions(P.VIEW)
+  dashboard() {
+    return this.service.getDashboard();
   }
 
   // ---------- Flow B: คลังรับสินค้าเทิร์น ----------
@@ -142,5 +162,26 @@ export class ReturnsDiscountController {
   @RequirePermissions(P.VIEW)
   ledger(@Query('productId') productId: string, @Query('productModelId') productModelId?: string) {
     return this.service.getLedger(productId, productModelId ?? null);
+  }
+
+  /** รายการตัดจำหน่าย (filter เหตุผล/สถานะมูลค่าขาย) */
+  @Get('disposals')
+  @RequirePermissions(P.VIEW)
+  disposals(
+    @Query('reasonId') reasonId?: string,
+    @Query('saleValueStatus') saleValueStatus?: string,
+  ) {
+    return this.service.listDisposals({ reasonId, saleValueStatus });
+  }
+
+  /** ผู้บริหารบันทึกมูลค่าขายของรายการตัดจำหน่าย */
+  @Post('disposals/:id/sale-value')
+  @RequirePermissions(P.SET_SALE_VALUE)
+  setSaleValue(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(setSaleValueSchema)) body: { saleValue: number },
+  ) {
+    return this.service.setSaleValue(user, id, body.saleValue);
   }
 }

@@ -139,3 +139,9 @@ export const createDisposalSchema = z.object({
   counterpartyName: z.string().optional(),
 });
 export type CreateDisposalInput = z.infer<typeof createDisposalSchema>;
+
+/** ผู้บริหารบันทึกมูลค่าขายของรายการตัดจำหน่าย (pending → recorded) */
+export const setSaleValueSchema = z.object({
+  saleValue: z.coerce.number().nonnegative('มูลค่าขายต้องไม่ติดลบ'),
+});
+export type SetSaleValueInput = z.infer<typeof setSaleValueSchema>;

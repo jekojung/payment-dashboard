@@ -204,6 +204,34 @@ pnpm dev
 | 5 | โมดูล 1 — Flow A (แจ้งส่วนลด + อนุมัติพิเศษ) | ✅ เสร็จ (REST + Flex + postback + เทสต์ 12) |
 | 6 | โมดูล 1 — Flow B (รับเข้า + Google Drive + stock movement) | ✅ เสร็จ (multipart upload + movement + mismatch + เทสต์ 7) |
 | 7 | โมดูล 1 — Flow C (ตัดจำหน่าย) + Flow D (ตรวจสต็อก) | ✅ เสร็จ (3 เหตุผล + validate คงเหลือ + ledger + เทสต์ 8) |
-| 8 | Web: dashboard shell + login + nav | ⏳ |
-| 9 | Web: หน้าโมดูล 1 + หน้า admin | ⏳ |
-| 10 | Seed data ครบ + ตรวจ end-to-end | ⏳ |
+| 8 | Web: dashboard shell + login + nav | ✅ เสร็จ (auth JWT + sidebar ตามสิทธิ์ + layout responsive) |
+| 9 | Web: หน้าโมดูล 1 + หน้า admin | ✅ เสร็จ (KPI/กราฟ/ตาราง/detail/สต็อก/ตัดจำหน่าย/อนุมัติ + admin 5 หน้า) |
+| 10 | Seed data ครบ + ตรวจ end-to-end | ✅ เสร็จ (4 ใบ GD หลายสถานะ + movements + E2E ผ่าน) |
+
+**✅ ครบทั้ง 10 ขั้น — พร้อมทดสอบระบบจริง**
+
+---
+
+## การทดสอบระบบ (Quick Start)
+
+```bash
+pnpm install
+cp .env.example .env          # แก้ DATABASE_URL ให้ตรง PostgreSQL ของคุณ
+pnpm prisma:generate
+pnpm prisma:migrate           # หรือ pnpm db:reset เพื่อรีเซ็ต + seed ใหม่
+pnpm prisma:seed              # seed: 6 ผู้ใช้ + master data + 4 ใบ GD ตัวอย่าง + สต็อก
+pnpm dev                      # api :3000 + web :5173
+```
+
+เปิด `http://localhost:5173` → เข้าสู่ระบบด้วยบัญชีทดสอบ (รหัสผ่าน `password123`):
+
+| บัญชี | เห็นอะไรบนเว็บ |
+|---|---|
+| `ADMIN001` | ทุกอย่าง: Dashboard + โมดูล 1 + เมนู admin ครบ |
+| `EXEC001` | Dashboard โมดูล 1 (อ่าน) + **บันทึกมูลค่าขาย** ในหน้าตัดจำหน่าย + แก้ตารางส่วนลด |
+| `SLEAD001` | โมดูล 1 + หน้า **รออนุมัติพิเศษ** (กดอนุมัติ/ปฏิเสธได้) |
+| `WLEAD001` | โมดูล 1 (คลัง) |
+
+**จุดที่ควรลองดู:** หน้าภาพรวม (KPI/กราฟ) · ใบ GD ทั้งหมด → คลิกดูรายละเอียด · สต็อก → ดู ledger · ตัดจำหน่าย → (EXEC) บันทึกมูลค่าขาย · รออนุมัติพิเศษ (SLEAD) · เมนู admin (ADMIN)
+
+> ข้อมูล seed มี: ใบ GD ครบทุกสถานะ (รับครบ/รับบางส่วน/บันทึกแล้ว), รายการ over-standard ที่ทั้งอนุมัติ/ปฏิเสธ/รออนุมัติ, ธง mismatch, ตัดจำหน่ายทั้งแบบบันทึกมูลค่าแล้วและรอบันทึก
