@@ -5,17 +5,21 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import {
   ApprovalStatus,
   DiscountStatus,
   NotificationChannel,
   Permissions,
   ReceiptStatus,
+  ReturnDocumentStatus,
+  StockMovementType,
   type CreateReturnDiscountInput,
 } from '@tpg/shared';
 import type { AuthUser } from '../../common/auth-user';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../../core/audit/audit.service';
+import { AttachmentsService } from '../../core/attachments/attachments.service';
 import { NotificationsService } from '../../core/notifications/notifications.service';
 import { RbacService } from '../../core/rbac/rbac.service';
 import { LineService } from '../../core/line/line.service';
@@ -42,6 +46,7 @@ export class ReturnsDiscountService {
     private readonly notifications: NotificationsService,
     private readonly rbac: RbacService,
     private readonly line: LineService,
+    private readonly attachments: AttachmentsService,
   ) {}
 
   // ---------------------------------------------------------------------------
@@ -257,6 +262,179 @@ export class ReturnsDiscountService {
         createdBy: { select: { name: true, employeeCode: true } },
         items: { include: { product: true, productModel: true } },
       },
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Flow B — คลังตรวจรับสินค้าเทิร์น
+  // ---------------------------------------------------------------------------
+
+  /** ยอดคงเหลือสต็อกรับเทิร์น = SUM(quantity_change) ต่อ (สินค้า/รุ่น) */
+  async getBalance(productId: string, productModelId: string | null): Promise<number> {
+    const agg = await this.prisma.returnStockMovement.aggregate({
+      where: { productId, productModelId: productModelId ?? null },
+      _sum: { quantityChange: true },
+    });
+    return agg._sum.quantityChange ?? 0;
+  }
+
+  /** ใบ GD ที่มีรายการพร้อมรับ (pending_receipt + อนุมัติแล้ว/ไม่ต้องอนุมัติ) */
+  listReceivable() {
+    const readyFilter = {
+      receiptStatus: ReceiptStatus.PENDING_RECEIPT,
+      approvalStatus: { in: [ApprovalStatus.NOT_REQUIRED, ApprovalStatus.APPROVED] },
+    };
+    return this.prisma.returnDocument.findMany({
+      where: { items: { some: readyFilter } },
+      orderBy: { createdAt: 'desc' },
+      include: {
+        createdBy: { select: { name: true, employeeCode: true } },
+        items: {
+          where: readyFilter,
+          include: { product: true, productModel: true },
+        },
+      },
+    });
+  }
+
+  /**
+   * คลังบันทึกรับสินค้า: ตรวจรูป → อัปโหลด → update item + สร้าง stock movement receipt
+   * ถ้า received ≠ declared → ตั้งธง qty_mismatch
+   */
+  async receiveItem(
+    actor: Actor,
+    itemId: string,
+    receivedQuantity: number,
+    photo?: { buffer: Buffer; originalname: string; mimetype: string },
+  ) {
+    if (!actor.isSystemAdmin && !actor.permissions.includes(P.RECEIVE)) {
+      throw new ForbiddenException('ไม่มีสิทธิ์รับสินค้าเทิร์น');
+    }
+
+    const item = await this.prisma.returnItem.findUnique({
+      where: { id: itemId },
+      include: { returnDocument: true, product: true, productModel: true },
+    });
+    if (!item) throw new NotFoundException('ไม่พบรายการ');
+    if (item.receiptStatus === ReceiptStatus.RECEIVED) {
+      throw new BadRequestException('รายการนี้รับเข้าแล้ว');
+    }
+    if (
+      item.approvalStatus !== ApprovalStatus.NOT_REQUIRED &&
+      item.approvalStatus !== ApprovalStatus.APPROVED
+    ) {
+      throw new BadRequestException('รายการนี้ยังไม่พร้อมรับ (รออนุมัติหรือถูกปฏิเสธ)');
+    }
+    if (!photo) throw new BadRequestException('กรุณาแนบรูปสินค้าที่รับ');
+
+    const qtyMismatch = receivedQuantity !== item.declaredQuantity;
+
+    // อัปโหลดรูปขึ้น storage (Google Drive / local) + ผูก attachment
+    const attachment = await this.attachments.createForOwner({
+      ownerType: 'return_item',
+      ownerId: item.id,
+      file: { buffer: photo.buffer, filename: photo.originalname, mime: photo.mimetype },
+      uploadedById: actor.id,
+    });
+
+    const { updated, movement, docStatus } = await this.prisma.$transaction(async (tx) => {
+      const updated = await tx.returnItem.update({
+        where: { id: item.id },
+        data: {
+          receivedQuantity,
+          receiptStatus: ReceiptStatus.RECEIVED,
+          receivedById: actor.id,
+          receivedAt: new Date(),
+          qtyMismatch,
+        },
+      });
+      const movement = await tx.returnStockMovement.create({
+        data: {
+          productId: item.productId,
+          productModelId: item.productModelId,
+          quantityChange: receivedQuantity,
+          movementType: StockMovementType.RECEIPT,
+          referenceType: 'return_item',
+          referenceId: item.id,
+          createdById: actor.id,
+        },
+      });
+      const docStatus = await this.recomputeDocumentStatus(tx, item.returnDocumentId);
+      return { updated, movement, docStatus };
+    });
+
+    await this.audit.log({
+      userId: actor.id,
+      moduleKey: MODULE_KEY,
+      action: 'stock.receipt',
+      entity: 'return_item',
+      entityId: item.id,
+      payload: {
+        gdNumber: item.returnDocument.gdNumber,
+        declaredQuantity: item.declaredQuantity,
+        receivedQuantity,
+        qtyMismatch,
+        movementId: movement.id,
+      },
+    });
+
+    await this.notifyReceipt(item, receivedQuantity, qtyMismatch);
+
+    const balance = await this.getBalance(item.productId, item.productModelId);
+    return {
+      item: updated,
+      movement,
+      qtyMismatch,
+      documentStatus: docStatus,
+      balance,
+      attachment: { id: attachment.id, driveLink: attachment.driveLink },
+    };
+  }
+
+  /** คำนวณสถานะใบ GD ใหม่จากรายการ (item ที่ rejected ไม่นับ) */
+  private async recomputeDocumentStatus(
+    tx: Prisma.TransactionClient,
+    documentId: string,
+  ): Promise<ReturnDocumentStatus> {
+    const items = await tx.returnItem.findMany({ where: { returnDocumentId: documentId } });
+    const relevant = items.filter((i) => i.approvalStatus !== ApprovalStatus.REJECTED);
+    const receivedCount = relevant.filter(
+      (i) => i.receiptStatus === ReceiptStatus.RECEIVED,
+    ).length;
+
+    let status: ReturnDocumentStatus;
+    if (relevant.length === 0 || receivedCount === 0) {
+      status = ReturnDocumentStatus.RECORDED;
+    } else if (receivedCount === relevant.length) {
+      status = ReturnDocumentStatus.FULLY_RECEIVED;
+    } else {
+      status = ReturnDocumentStatus.PARTIALLY_RECEIVED;
+    }
+
+    await tx.returnDocument.update({ where: { id: documentId }, data: { status } });
+    return status;
+  }
+
+  /** แจ้งฝ่ายขายผู้สร้างใบว่ารับสินค้าแล้ว (+ เตือน mismatch) */
+  private async notifyReceipt(
+    item: {
+      returnDocument: { gdNumber: string; createdById: string };
+      product: { name: string };
+      declaredQuantity: number;
+    },
+    receivedQuantity: number,
+    qtyMismatch: boolean,
+  ) {
+    const title = qtyMismatch ? '⚠️ รับสินค้าแล้ว (จำนวนไม่ตรง)' : '📥 รับสินค้าเทิร์นแล้ว';
+    const body = qtyMismatch
+      ? `ใบ GD ${item.returnDocument.gdNumber} — ${item.product.name}\nแจ้ง ${item.declaredQuantity} / รับจริง ${receivedQuantity}`
+      : `ใบ GD ${item.returnDocument.gdNumber} — ${item.product.name}\nรับจริง ${receivedQuantity}`;
+
+    await this.notifications.notify({
+      userId: item.returnDocument.createdById,
+      channel: NotificationChannel.WEB,
+      title,
+      body,
     });
   }
 

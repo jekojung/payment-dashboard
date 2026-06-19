@@ -117,3 +117,10 @@ export const rejectReturnItemSchema = z.object({
   reason: z.string().min(1, 'กรุณาระบุเหตุผลการปฏิเสธ'),
 });
 export type RejectReturnItemInput = z.infer<typeof rejectReturnItemSchema>;
+
+// ---------- โมดูล 1: Flow B (คลังรับสินค้าเทิร์น) ----------
+/** คลังบันทึกจำนวนที่รับจริง (แนบรูปผ่าน multipart แยก) */
+export const receiveItemSchema = z.object({
+  receivedQuantity: z.coerce.number().int().positive('จำนวนที่รับต้องมากกว่า 0'),
+});
+export type ReceiveItemInput = z.infer<typeof receiveItemSchema>;

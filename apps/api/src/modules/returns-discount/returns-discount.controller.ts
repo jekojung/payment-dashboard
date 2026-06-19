@@ -1,7 +1,18 @@
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Post,
+  Query,
+  UploadedFile,
+  UseInterceptors,
+} from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import {
   Permissions,
   createReturnDiscountSchema,
+  receiveItemSchema,
   rejectReturnItemSchema,
   type CreateReturnDiscountInput,
   type RejectReturnItemInput,
@@ -10,6 +21,13 @@ import { CurrentUser, RequirePermissions } from '../../common/decorators';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe';
 import type { AuthUser } from '../../common/auth-user';
 import { ReturnsDiscountService } from './returns-discount.service';
+
+/** ไฟล์ที่อัปโหลดผ่าน multer (memory storage) */
+interface UploadedPhoto {
+  buffer: Buffer;
+  originalname: string;
+  mimetype: string;
+}
 
 const P = Permissions.RETURNS_DISCOUNT;
 
@@ -72,5 +90,27 @@ export class ReturnsDiscountController {
   @RequirePermissions(P.VIEW)
   documents() {
     return this.service.listDocuments();
+  }
+
+  // ---------- Flow B: คลังรับสินค้าเทิร์น ----------
+
+  /** ใบ GD ที่มีรายการพร้อมรับ (สำหรับฟอร์ม LIFF คลัง) */
+  @Get('receivable')
+  @RequirePermissions(P.RECEIVE)
+  receivable() {
+    return this.service.listReceivable();
+  }
+
+  /** บันทึกรับสินค้า + แนบรูป (multipart: field "photo" + receivedQuantity) */
+  @Post('items/:id/receive')
+  @RequirePermissions(P.RECEIVE)
+  @UseInterceptors(FileInterceptor('photo'))
+  receive(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(receiveItemSchema)) body: { receivedQuantity: number },
+    @UploadedFile() photo?: UploadedPhoto,
+  ) {
+    return this.service.receiveItem(user, id, body.receivedQuantity, photo);
   }
 }

@@ -119,6 +119,8 @@ pnpm dev
 | `POST /returns-discount/items/:id/approve` | `returns_discount:approve_special` | อนุมัติ → แจ้งฝ่ายขาย/คลัง |
 | `POST /returns-discount/items/:id/reject` | `returns_discount:approve_special` | ปฏิเสธ (ต้องมีเหตุผล) → แจ้งฝ่ายขาย |
 | `GET /returns-discount/documents` | `returns_discount:view` | รายการใบ GD (เต็มในขั้นที่ 9) |
+| `GET /returns-discount/receivable` | `returns_discount:receive` | ใบ GD ที่มีรายการพร้อมรับ (Flow B) |
+| `POST /returns-discount/items/:id/receive` | `returns_discount:receive` | รับสินค้า (multipart: `photo` + `receivedQuantity`) → upload + stock movement + ธง mismatch |
 
 > **LINE (Flow A):** หัวหน้าได้ Flex card อนุมัติ/ปฏิเสธผ่าน push; กดปุ่ม postback → อนุมัติทันที หรือกดปฏิเสธแล้วพิมพ์เหตุผลตามมา; ผลแจ้งกลับฝ่ายขายเป็น Flex
 
@@ -197,7 +199,7 @@ pnpm dev
 | 3 | Core: auth, RBAC, users, registry, audit, attachments, notifications, masterdata | ✅ เสร็จ (API + เทสต์) |
 | 4 | LINE core: webhook + line-binding + dynamic rich menu | ✅ เสร็จ (verify signature ทดสอบกับ secret จริงแล้ว) |
 | 5 | โมดูล 1 — Flow A (แจ้งส่วนลด + อนุมัติพิเศษ) | ✅ เสร็จ (REST + Flex + postback + เทสต์ 12) |
-| 6 | โมดูล 1 — Flow B (รับเข้า + Google Drive + stock movement) | ⏳ |
+| 6 | โมดูล 1 — Flow B (รับเข้า + Google Drive + stock movement) | ✅ เสร็จ (multipart upload + movement + mismatch + เทสต์ 7) |
 | 7 | โมดูล 1 — Flow C (ตัดจำหน่าย) + Flow D (ตรวจสต็อก) | ⏳ |
 | 8 | Web: dashboard shell + login + nav | ⏳ |
 | 9 | Web: หน้าโมดูล 1 + หน้า admin | ⏳ |
