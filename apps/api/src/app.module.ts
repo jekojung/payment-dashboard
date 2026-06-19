@@ -8,23 +8,22 @@ import { RbacModule } from './core/rbac/rbac.module';
 import { PermissionsGuard } from './core/rbac/permissions.guard';
 import { UsersModule } from './core/users/users.module';
 import { AuditModule } from './core/audit/audit.module';
-import { AttachmentsModule } from './core/attachments/attachments.module';
+import { LineModule } from './core/line/line.module';
 import { NotificationsModule } from './core/notifications/notifications.module';
+import { AttachmentsModule } from './core/attachments/attachments.module';
 import { MasterdataModule } from './core/masterdata/masterdata.module';
 import { RegistryModule } from './core/modules/registry.module';
 import { RegistryService } from './core/modules/registry.service';
 import { ReturnsDiscountModule } from './modules/returns-discount/returns-discount.module';
 
-/**
- * AppModule — core platform root + โมดูลธุรกิจ
- * global guards: JwtAuthGuard (authn) -> PermissionsGuard (authz)
- */
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true, envFilePath: ['.env', '../../.env'] }),
     PrismaModule,
     RbacModule,
     AuditModule,
+    // LineModule ก่อน NotificationsModule เพื่อให้ LINE_PUSH_PORT พร้อมใช้
+    LineModule,
     NotificationsModule,
     AttachmentsModule,
     RegistryModule,
@@ -43,7 +42,6 @@ export class AppModule implements OnModuleInit {
   constructor(private readonly registry: RegistryService) {}
 
   async onModuleInit(): Promise<void> {
-    // sync โมดูลที่ลงทะเบียนแล้วลงตาราง modules
     await this.registry.syncToDatabase();
   }
 }

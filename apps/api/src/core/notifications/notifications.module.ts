@@ -1,16 +1,15 @@
 import { Global, Module } from '@nestjs/common';
-import { LINE_PUSH_PORT, NoopLinePush } from './line-push.port';
 import { NotificationsController } from './notifications.controller';
 import { NotificationsService } from './notifications.service';
 
 /**
  * NotificationsModule — global
- * LINE_PUSH_PORT ใช้ NoopLinePush ก่อน ขั้นที่ 4 จะ override ด้วย implementation จริง
+ * LINE_PUSH_PORT inject ได้จาก global scope ผ่าน LineModule
  */
 @Global()
 @Module({
   controllers: [NotificationsController],
-  providers: [NotificationsService, { provide: LINE_PUSH_PORT, useClass: NoopLinePush }],
-  exports: [NotificationsService, LINE_PUSH_PORT],
+  providers: [NotificationsService],
+  exports: [NotificationsService],
 })
 export class NotificationsModule {}

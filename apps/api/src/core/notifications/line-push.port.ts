@@ -1,20 +1,23 @@
 import { Logger } from '@nestjs/common';
 
-/**
- * พอร์ตสำหรับ push ข้อความไป LINE — ขั้นที่ 4 (LINE core) จะ implement จริง
- * แยก interface ไว้เพื่อไม่ให้ core notifications ผูกกับ LINE SDK โดยตรง
- */
 export const LINE_PUSH_PORT = Symbol('LINE_PUSH_PORT');
 
 export interface LinePushPort {
-  /** push ข้อความ text ไปยัง lineUserId (ขั้นที่ 4 รองรับ Flex ด้วย) */
   pushText(lineUserId: string, text: string): Promise<void>;
+  pushFlex(lineUserId: string, altText: string, contents: object): Promise<void>;
+  replyText(replyToken: string, text: string): Promise<void>;
 }
 
-/** default no-op (ก่อนต่อ LINE SDK ในขั้นที่ 4) — log ไว้เพื่อ debug */
+/** no-op default — ใช้ก่อนที่ LineModule จะ override ด้วย LinePushAdapter */
 export class NoopLinePush implements LinePushPort {
   private readonly logger = new Logger('NoopLinePush');
   async pushText(lineUserId: string, text: string): Promise<void> {
     this.logger.debug(`[noop] push to ${lineUserId}: ${text}`);
+  }
+  async pushFlex(lineUserId: string, altText: string, _contents: object): Promise<void> {
+    this.logger.debug(`[noop] push flex to ${lineUserId}: ${altText}`);
+  }
+  async replyText(replyToken: string, text: string): Promise<void> {
+    this.logger.debug(`[noop] reply ${replyToken}: ${text}`);
   }
 }
