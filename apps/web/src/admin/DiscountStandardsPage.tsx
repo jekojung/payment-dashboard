@@ -25,8 +25,8 @@ interface Std {
   effectiveFrom: string;
   effectiveTo: string | null;
   isActive: boolean;
-  product: { name: string };
-  productModel: { name: string } | null;
+  product: { id: string; name: string };
+  productModel: { id: string; name: string } | null;
 }
 
 interface ProductModel {
@@ -170,8 +170,8 @@ export function DiscountStandardsPage() {
 
   const toForm = (s: Std): Std & StdForm => ({
     ...s,
-    productId: '',
-    productModelId: '',
+    productId: s.product.id,
+    productModelId: s.productModel?.id ?? '',
     effectiveFrom: s.effectiveFrom.slice(0, 10),
     effectiveTo: s.effectiveTo ? s.effectiveTo.slice(0, 10) : '',
   });
