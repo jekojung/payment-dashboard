@@ -1,1 +1,237 @@
-# payment-dashboard
+# TPG Center — ระบบติดตามงานคลังสินค้าและขนส่ง
+
+Core Platform (เฟส 0) + โมดูล 1 (ส่วนลดจากการรับคืนสินค้าเทิร์น + การจัดการสต็อกสินค้ารับเทิร์น)
+
+บริษัท TPG Center จำหน่ายสินค้าซ่อมบำรุงโรงงาน และเป็นตัวแทนแบรนด์ SKF
+พนักงานบันทึกงานผ่าน **LINE OA** ผู้บริหาร/หัวหน้าแผนกติดตามผ่าน **Web Dashboard**
+
+---
+
+## Tech Stack
+
+- **Monorepo:** pnpm workspaces → `apps/api`, `apps/web`, `packages/shared`
+- **Backend (`apps/api`):** Node.js + TypeScript + NestJS
+- **ORM/DB:** PostgreSQL + Prisma (migration + seed)
+- **Frontend (`apps/web`):** React + Vite + TypeScript + Tailwind + shadcn/ui + Recharts
+- **LINE:** `@line/bot-sdk` (Messaging API) + LIFF
+- **Auth:** JWT (web) + ผูกบัญชี LINE userId กับ user
+- **Storage รูป:** Google Drive (Service Account)
+- ภาษา UI/ข้อความ LINE = ไทย, โค้ด/ตาราง = อังกฤษ, เขตเวลา `Asia/Bangkok`
+
+---
+
+## โครงสร้างโปรเจกต์
+
+```
+apps/
+  api/                 # NestJS + Prisma
+    prisma/
+      schema.prisma    # core + โมดูล 1 (stock + disposal)
+      seed.ts
+    src/
+      core/            # auth, rbac, users, modules(registry), audit,
+                       # attachments(Google Drive), notifications, masterdata, line
+      modules/
+        returns-discount/   # โมดูล 1 ทั้งก้อน
+  web/                 # React + Vite + Tailwind
+    src/
+      core/            # layout, auth, nav, dashboard shell
+      modules/
+        returns-discount/
+packages/
+  shared/              # types, enums, zod schemas ใช้ร่วม api+web
+```
+
+**กติกาเพิ่มโมดูลใหม่:** เพิ่มโฟลเดอร์ใน `modules/<name>` ทั้ง api และ web แล้วลงทะเบียนผ่าน
+Module Registry เท่านั้น — ห้ามแก้ core
+
+---
+
+## ความต้องการระบบ (Prerequisites)
+
+- Node.js ≥ 20
+- pnpm ≥ 9
+- PostgreSQL ≥ 14 (local หรือ remote)
+
+---
+
+## เริ่มต้นใช้งาน
+
+```bash
+# 1) ติดตั้ง dependencies (จาก root)
+pnpm install
+
+# 2) ตั้งค่า environment
+cp .env.example .env
+#   แก้ DATABASE_URL, JWT_SECRET, LINE_*, LIFF_ID, GOOGLE_* ให้ครบ
+
+# 3) สร้าง Prisma client + migrate ฐานข้อมูล
+pnpm prisma:generate
+pnpm prisma:migrate        # prisma migrate dev
+
+# 4) seed ข้อมูลตั้งต้น  (เต็มในขั้นที่ 10)
+pnpm prisma:seed
+
+# 5) รัน dev ทั้ง api + web
+pnpm dev
+#   api : http://localhost:3000
+#   web : http://localhost:5173
+```
+
+> รีเซ็ตฐานข้อมูล (ลบ + migrate + seed ใหม่): `pnpm db:reset`
+
+### บัญชีทดสอบ (จาก seed — รหัสผ่านเดียวกัน `password123`)
+
+| employeeCode | role | ช่องทาง |
+|---|---|---|
+| `ADMIN001` | system_admin | web (เห็นทุกอย่าง) |
+| `EXEC001` | executive | web (ดู + แก้ตารางส่วนลด + บันทึกมูลค่าขาย) |
+| `SLEAD001` | sales_lead | web + line (อนุมัติพิเศษ) |
+| `WLEAD001` | warehouse_lead | web + line (คลัง) |
+| `SALE001` | sales_staff | line (แจ้งส่วนลด) |
+| `WH001` | warehouse_staff | line (รับ/ตัดจำหน่าย/ตรวจสต็อก) |
+
+ตัวอย่าง login: `POST /auth/login { "employeeCode": "ADMIN001", "password": "password123" }`
+
+### API หลัก (ขั้นที่ 3)
+
+| method · path | สิทธิ์ | หมายเหตุ |
+|---|---|---|
+| `POST /auth/login` | public | คืน JWT + roles/permissions |
+| `POST /auth/line/bind` | public | ผูก LINE ด้วยรหัสพนักงาน |
+| `GET /auth/me` | (token) | ข้อมูลผู้ใช้ปัจจุบัน |
+| `GET /modules/me/navigation` | (token) | เมนู LINE/เว็บ/การ์ด ตามสิทธิ์ (dynamic) |
+| `GET/POST/PATCH /users`, `DELETE /users/:id/line-binding` | `core:manage_users` | จัดการผู้ใช้ + ลบการผูก LINE |
+| `GET /masterdata/*` | (token) | อ่าน master data |
+| `POST/PATCH /masterdata/*` | `core:manage_masterdata` | จัดการ (ยกเว้นตารางส่วนลด) |
+| `POST/PATCH /masterdata/discount-standards` | `core:manage_discount_standards` | admin + executive |
+| `GET /notifications`, `PATCH /notifications/read` | (token) | การแจ้งเตือนของฉัน |
+| `GET /attachments` | (token) | ไฟล์แนบของ owner |
+| `GET /audit` | `core:view_audit` | audit log |
+
+### API โมดูล 1 — Flow A (ขั้นที่ 5)
+
+| method · path | สิทธิ์ | หมายเหตุ |
+|---|---|---|
+| `POST /returns-discount/items` | `returns_discount:create` | ฝ่ายขายแจ้งส่วนลด (เทียบมาตรฐาน → in/over อัตโนมัติ) |
+| `GET /returns-discount/standards/compare` | `returns_discount:create` | preview ผลเทียบก่อนยืนยัน (ใช้ใน LIFF) |
+| `GET /returns-discount/items/pending-approvals` | `returns_discount:approve_special` | รายการรออนุมัติพิเศษ |
+| `POST /returns-discount/items/:id/approve` | `returns_discount:approve_special` | อนุมัติ → แจ้งฝ่ายขาย/คลัง |
+| `POST /returns-discount/items/:id/reject` | `returns_discount:approve_special` | ปฏิเสธ (ต้องมีเหตุผล) → แจ้งฝ่ายขาย |
+| `GET /returns-discount/documents` | `returns_discount:view` | รายการใบ GD (เต็มในขั้นที่ 9) |
+| `GET /returns-discount/receivable` | `returns_discount:receive` | ใบ GD ที่มีรายการพร้อมรับ (Flow B) |
+| `POST /returns-discount/items/:id/receive` | `returns_discount:receive` | รับสินค้า (multipart: `photo` + `receivedQuantity`) → upload + stock movement + ธง mismatch |
+| `POST /returns-discount/disposals` | `returns_discount:disposal` | ตัดจำหน่าย (validate ≤ คงเหลือ, เหตุผล + คู่ค้าปลายทาง, sale_value=pending) |
+| `GET /returns-discount/stock` | `returns_discount:view` | ยอดคงเหลือต่อ (สินค้า/รุ่น); `?all=true` รวมคงเหลือ 0 |
+| `GET /returns-discount/stock/ledger` | `returns_discount:view` | ประวัติ movement ของสินค้า/รุ่น |
+
+> **LINE (Flow A):** หัวหน้าได้ Flex card อนุมัติ/ปฏิเสธผ่าน push; กดปุ่ม postback → อนุมัติทันที หรือกดปฏิเสธแล้วพิมพ์เหตุผลตามมา; ผลแจ้งกลับฝ่ายขายเป็น Flex
+
+---
+
+## Environment Variables
+
+ดูรายละเอียดทั้งหมดใน [`.env.example`](./.env.example) — กลุ่มหลัก:
+
+| กลุ่ม | ตัวแปร |
+|---|---|
+| Database | `DATABASE_URL` |
+| Auth | `JWT_SECRET`, `JWT_EXPIRES_IN` |
+| LINE | `LINE_CHANNEL_ACCESS_TOKEN`, `LINE_CHANNEL_SECRET` |
+| LIFF | `LIFF_ID`, `VITE_LIFF_ID` |
+| Google Drive | `GOOGLE_SERVICE_ACCOUNT_JSON` / `GOOGLE_SERVICE_ACCOUNT_JSON_PATH`, `GDRIVE_FOLDER_ID` |
+| Web | `VITE_API_BASE_URL` |
+
+### ตั้งค่า LINE Webhook
+
+1. สร้าง Messaging API channel ใน [LINE Developers Console](https://developers.line.biz/)
+2. นำ `Channel access token` และ `Channel secret` ใส่ `.env`
+3. ตั้ง Webhook URL = `{API_BASE_URL}/line/webhook` แล้วเปิด **Use webhook**
+
+> **โหมดการทำงาน:**
+> - **ไม่ได้ตั้ง** `LINE_CHANNEL_ACCESS_TOKEN`/`LINE_CHANNEL_SECRET` → webhook รันแบบ dev-mode (ข้าม verify signature, push/reply เป็น log) — เหมาะกับการพัฒนา local
+> - **ตั้งแล้ว** → ตรวจ HMAC-SHA256 signature จริง + push/reply ผ่าน LINE API + สร้าง rich menu ตามบทบาท
+>
+> **คำสั่งใน LINE OA:**
+> - `ผูกบัญชี {รหัสพนักงาน}` — ผูกบัญชี LINE เข้ากับพนักงาน (เช่น `ผูกบัญชี SALE001`) + กำหนด rich menu อัตโนมัติตามบทบาท
+> - `ช่วยเหลือ` — แสดงคำแนะนำ
+>
+> **Rich menu:** สร้างอัตโนมัติตอน startup 3 กลุ่ม (sales / warehouse / default)
+> ต้องอัปโหลดรูป 2500×843 px ผ่าน `POST https://api-data.line.me/v2/bot/richmenu/{richMenuId}/content` จึงจะแสดงผล (ดู log ตอน startup สำหรับ richMenuId)
+>
+> **หมายเหตุ (remote/sandbox):** หากรันใน environment ที่จำกัด network egress ต้องอนุญาตโฮสต์
+> `api.line.me` และ `api-data.line.me` ด้วย มิฉะนั้นการสร้าง rich menu / push จะได้ `403 Host not in allowlist`
+> (การ verify signature ของ webhook ทำงานได้โดยไม่ต้องต่อ network)
+
+### ตั้งค่า LIFF (จะ implement ในขั้นที่ 4-7)
+
+1. สร้าง LIFF app ใน channel เดียวกัน → Endpoint URL ชี้ไปยัง `{WEB_ORIGIN}` (หน้า LIFF)
+2. นำ `LIFF ID` ใส่ `.env` (`LIFF_ID` และ `VITE_LIFF_ID`)
+
+### ตั้งค่า Google Drive (Service Account) (จะ implement ในขั้นที่ 3/6)
+
+1. สร้าง Google Cloud project → เปิด **Google Drive API**
+2. สร้าง **Service Account** → ออก key เป็น JSON
+3. วาง JSON ไว้ที่ `GOOGLE_SERVICE_ACCOUNT_JSON_PATH` หรือใส่ทั้งก้อนใน `GOOGLE_SERVICE_ACCOUNT_JSON`
+4. สร้างโฟลเดอร์บน Google Drive → **แชร์โฟลเดอร์ให้อีเมลของ Service Account** (สิทธิ์ Editor)
+5. นำ Folder ID (จาก URL ของโฟลเดอร์) ใส่ `GDRIVE_FOLDER_ID`
+
+---
+
+## คำสั่งที่ใช้บ่อย
+
+| คำสั่ง (จาก root) | หน้าที่ |
+|---|---|
+| `pnpm dev` | รัน api + web พร้อมกัน |
+| `pnpm build` | build ทุก workspace |
+| `pnpm test` | รันเทสต์ทุก workspace |
+| `pnpm lint` | lint ทุก workspace |
+| `pnpm format` | จัดรูปแบบโค้ดด้วย Prettier |
+| `pnpm prisma:migrate` | สร้าง/ใช้ migration (dev) |
+| `pnpm prisma:seed` | seed ข้อมูล |
+| `pnpm db:reset` | รีเซ็ตฐานข้อมูล + seed |
+
+---
+
+## ลำดับการสร้าง (Build Order) & สถานะ
+
+| ขั้น | งาน | สถานะ |
+|---|---|---|
+| 1 | Monorepo + tooling + `.env.example` + README | ✅ เสร็จ |
+| 2 | Prisma schema (core + โมดูล 1 รวม stock + disposal) + migration | ✅ เสร็จ (migration `init` ใช้แล้ว) |
+| 3 | Core: auth, RBAC, users, registry, audit, attachments, notifications, masterdata | ✅ เสร็จ (API + เทสต์) |
+| 4 | LINE core: webhook + line-binding + dynamic rich menu | ✅ เสร็จ (verify signature ทดสอบกับ secret จริงแล้ว) |
+| 5 | โมดูล 1 — Flow A (แจ้งส่วนลด + อนุมัติพิเศษ) | ✅ เสร็จ (REST + Flex + postback + เทสต์ 12) |
+| 6 | โมดูล 1 — Flow B (รับเข้า + Google Drive + stock movement) | ✅ เสร็จ (multipart upload + movement + mismatch + เทสต์ 7) |
+| 7 | โมดูล 1 — Flow C (ตัดจำหน่าย) + Flow D (ตรวจสต็อก) | ✅ เสร็จ (3 เหตุผล + validate คงเหลือ + ledger + เทสต์ 8) |
+| 8 | Web: dashboard shell + login + nav | ✅ เสร็จ (auth JWT + sidebar ตามสิทธิ์ + layout responsive) |
+| 9 | Web: หน้าโมดูล 1 + หน้า admin | ✅ เสร็จ (KPI/กราฟ/ตาราง/detail/สต็อก/ตัดจำหน่าย/อนุมัติ + admin 5 หน้า) |
+| 10 | Seed data ครบ + ตรวจ end-to-end | ✅ เสร็จ (4 ใบ GD หลายสถานะ + movements + E2E ผ่าน) |
+
+**✅ ครบทั้ง 10 ขั้น — พร้อมทดสอบระบบจริง**
+
+---
+
+## การทดสอบระบบ (Quick Start)
+
+```bash
+pnpm install
+cp .env.example .env          # แก้ DATABASE_URL ให้ตรง PostgreSQL ของคุณ
+pnpm prisma:generate
+pnpm prisma:migrate           # หรือ pnpm db:reset เพื่อรีเซ็ต + seed ใหม่
+pnpm prisma:seed              # seed: 6 ผู้ใช้ + master data + 4 ใบ GD ตัวอย่าง + สต็อก
+pnpm dev                      # api :3000 + web :5173
+```
+
+เปิด `http://localhost:5173` → เข้าสู่ระบบด้วยบัญชีทดสอบ (รหัสผ่าน `password123`):
+
+| บัญชี | เห็นอะไรบนเว็บ |
+|---|---|
+| `ADMIN001` | ทุกอย่าง: Dashboard + โมดูล 1 + เมนู admin ครบ |
+| `EXEC001` | Dashboard โมดูล 1 (อ่าน) + **บันทึกมูลค่าขาย** ในหน้าตัดจำหน่าย + แก้ตารางส่วนลด |
+| `SLEAD001` | โมดูล 1 + หน้า **รออนุมัติพิเศษ** (กดอนุมัติ/ปฏิเสธได้) |
+| `WLEAD001` | โมดูล 1 (คลัง) |
+
+**จุดที่ควรลองดู:** หน้าภาพรวม (KPI/กราฟ) · ใบ GD ทั้งหมด → คลิกดูรายละเอียด · สต็อก → ดู ledger · ตัดจำหน่าย → (EXEC) บันทึกมูลค่าขาย · รออนุมัติพิเศษ (SLEAD) · เมนู admin (ADMIN)
+
+> ข้อมูล seed มี: ใบ GD ครบทุกสถานะ (รับครบ/รับบางส่วน/บันทึกแล้ว), รายการ over-standard ที่ทั้งอนุมัติ/ปฏิเสธ/รออนุมัติ, ธง mismatch, ตัดจำหน่ายทั้งแบบบันทึกมูลค่าแล้วและรอบันทึก

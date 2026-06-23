@@ -1,0 +1,410 @@
+// ============================================================
+// TPG Center Platform — Prisma schema
+// Core Platform (เฟส 0) + โมดูล 1 (returns-discount: ส่วนลด + รับเข้า + สต็อก + ตัดจำหน่าย)
+// PostgreSQL · เขตเวลา Asia/Bangkok · enum/ตาราง = อังกฤษ
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// Enums  (ต้องตรงกับ packages/shared/src/enums.ts)
+// ============================================================
+
+enum Channel {
+  line
+  web
+}
+
+enum ReturnDocumentStatus {
+  recorded
+  partially_received
+  fully_received
+}
+
+enum DiscountStatus {
+  within_standard
+  over_standard
+}
+
+enum ApprovalStatus {
+  not_required
+  pending
+  approved
+  rejected
+}
+
+enum ReceiptStatus {
+  pending_receipt
+  received
+}
+
+enum StockMovementType {
+  receipt
+  disposal
+}
+
+enum CounterpartyType {
+  supplier
+  buyer
+}
+
+enum CounterpartyKind {
+  supplier
+  buyer
+  none
+}
+
+enum SaleValueStatus {
+  pending
+  recorded
+}
+
+enum NotificationChannel {
+  line
+  web
+}
+
+// ============================================================
+// 5.1 Core
+// ============================================================
+
+model User {
+  id           String   @id @default(cuid())
+  employeeCode String   @unique @map("employee_code")
+  name         String
+  passwordHash String?  @map("password_hash") // ผู้ใช้ฝั่ง web ตั้งรหัสผ่าน; staff ที่ใช้แค่ LINE เป็น null ได้
+  lineUserId   String?  @unique @map("line_user_id")
+  department   String?
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  userRoles           UserRole[]
+  auditLogs           AuditLog[]
+  notifications       Notification[]
+  uploadedAttachments Attachment[]   @relation("AttachmentUploader")
+
+  // โมดูล 1 — relations ของผู้กระทำการ
+  createdReturnDocuments     ReturnDocument[]      @relation("ReturnDocCreatedBy")
+  approvedReturnItems        ReturnItem[]          @relation("ReturnItemApprovedBy")
+  receivedReturnItems        ReturnItem[]          @relation("ReturnItemReceivedBy")
+  createdStockMovements      ReturnStockMovement[] @relation("StockMovementCreatedBy")
+  saleValueRecordedMovements ReturnStockMovement[] @relation("StockMovementSaleValueBy")
+
+  @@map("users")
+}
+
+model Role {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  name      String
+  channel   Channel?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  rolePermissions RolePermission[]
+  userRoles       UserRole[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id        String   @id @default(cuid())
+  // รูปแบบ module:action เช่น returns_discount:create
+  key       String   @unique
+  moduleKey String   @map("module_key")
+  action    String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  rolePermissions RolePermission[]
+
+  @@map("permissions")
+}
+
+model RolePermission {
+  roleId       String @map("role_id")
+  permissionId String @map("permission_id")
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model UserRole {
+  userId String @map("user_id")
+  roleId String @map("role_id")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+  @@map("user_roles")
+}
+
+model Module {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  name      String
+  isEnabled Boolean  @default(true) @map("is_enabled")
+  config    Json?
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("modules")
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?  @map("user_id")
+  moduleKey String?  @map("module_key")
+  action    String
+  entity    String?
+  entityId  String?  @map("entity_id")
+  payload   Json?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([moduleKey, entity, entityId])
+  @@index([userId])
+  @@map("audit_logs")
+}
+
+// แนบไฟล์/รูปแบบ polymorphic -> Google Drive
+model Attachment {
+  id           String   @id @default(cuid())
+  ownerType    String   @map("owner_type") // เช่น "return_item"
+  ownerId      String   @map("owner_id")
+  driveFileId  String   @map("drive_file_id")
+  driveLink    String   @map("drive_link")
+  mime         String?
+  uploadedById String?  @map("uploaded_by")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  uploadedBy User? @relation("AttachmentUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
+
+  @@index([ownerType, ownerId])
+  @@map("attachments")
+}
+
+model Notification {
+  id        String              @id @default(cuid())
+  userId    String              @map("user_id")
+  channel   NotificationChannel
+  title     String
+  body      String?
+  isRead    Boolean             @default(false) @map("is_read")
+  createdAt DateTime            @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead])
+  @@map("notifications")
+}
+
+// ---------- Master data ----------
+
+model Customer {
+  id       String  @id @default(cuid())
+  code     String  @unique
+  name     String
+  isActive Boolean @default(true) @map("is_active")
+
+  @@map("customers")
+}
+
+model Supplier {
+  id       String  @id @default(cuid())
+  code     String  @unique
+  name     String
+  isActive Boolean @default(true) @map("is_active")
+
+  // counterparty อ้างอิงแบบ polymorphic จาก return_stock_movements (counterparty_type + counterparty_id)
+
+  @@map("suppliers")
+}
+
+model Buyer {
+  id       String  @id @default(cuid())
+  name     String
+  isActive Boolean @default(true) @map("is_active")
+
+  // counterparty อ้างอิงแบบ polymorphic จาก return_stock_movements (counterparty_type + counterparty_id)
+
+  @@map("buyers")
+}
+
+model Product {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  name      String
+  hasModels Boolean  @default(false) @map("has_models")
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  models            ProductModel[]
+  returnItems       ReturnItem[]
+  discountStandards DiscountStandard[]
+  stockMovements    ReturnStockMovement[]
+
+  @@map("products")
+}
+
+model ProductModel {
+  id        String  @id @default(cuid())
+  productId String  @map("product_id")
+  code      String
+  name      String
+  isActive  Boolean @default(true) @map("is_active")
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  returnItems       ReturnItem[]
+  discountStandards DiscountStandard[]
+  stockMovements    ReturnStockMovement[]
+
+  @@unique([productId, code])
+  @@map("product_models")
+}
+
+// ============================================================
+// 5.2 โมดูล 1 (prefix return_)
+// ============================================================
+
+model ReturnDocument {
+  id           String               @id @default(cuid())
+  gdNumber     String               @unique @map("gd_number")
+  customerCode String               @map("customer_code")
+  customerName String?              @map("customer_name")
+  createdById  String               @map("created_by")
+  status       ReturnDocumentStatus @default(recorded)
+  createdAt    DateTime             @default(now()) @map("created_at")
+
+  createdBy User         @relation("ReturnDocCreatedBy", fields: [createdById], references: [id])
+  items     ReturnItem[]
+
+  @@index([customerCode])
+  @@index([status])
+  @@map("return_documents")
+}
+
+model ReturnItem {
+  id               String  @id @default(cuid())
+  returnDocumentId String  @map("return_document_id")
+  productId        String  @map("product_id")
+  productModelId   String? @map("product_model_id")
+
+  declaredQuantity Int     @map("declared_quantity") // ฝ่ายขายแจ้ง
+  discountPerUnit  Decimal @map("discount_per_unit") @db.Decimal(12, 2) // บาท/หน่วย
+  totalDiscount    Decimal @map("total_discount") @db.Decimal(14, 2) // = discountPerUnit × declaredQuantity
+
+  standardDiscountSnapshot Decimal @map("standard_discount_snapshot") @db.Decimal(12, 2) // บาท/หน่วย ณ เวลาบันทึก
+
+  discountStatus DiscountStatus @map("discount_status")
+  approvalStatus ApprovalStatus @default(not_required) @map("approval_status")
+  approvedById   String?        @map("approved_by")
+  approvedAt     DateTime?      @map("approved_at")
+  rejectReason   String?        @map("reject_reason")
+
+  receivedQuantity Int?          @map("received_quantity")
+  receiptStatus    ReceiptStatus @default(pending_receipt) @map("receipt_status")
+  receivedById     String?       @map("received_by")
+  receivedAt       DateTime?     @map("received_at")
+  qtyMismatch      Boolean       @default(false) @map("qty_mismatch") // ธงเตือนเมื่อ received ≠ declared
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  returnDocument ReturnDocument @relation(fields: [returnDocumentId], references: [id], onDelete: Cascade)
+  product        Product        @relation(fields: [productId], references: [id])
+  productModel   ProductModel?  @relation(fields: [productModelId], references: [id])
+  approvedBy     User?          @relation("ReturnItemApprovedBy", fields: [approvedById], references: [id])
+  receivedBy     User?          @relation("ReturnItemReceivedBy", fields: [receivedById], references: [id])
+  // รูปที่รับ -> ผูกผ่าน Attachment (ownerType="return_item", ownerId=this.id)
+
+  @@index([returnDocumentId])
+  @@index([receiptStatus, approvalStatus])
+  @@index([discountStatus])
+  @@map("return_items")
+}
+
+// ตารางส่วนลดมาตรฐาน — ผู้บริหาร/admin กำหนดและแก้ไขได้
+model DiscountStandard {
+  id               String    @id @default(cuid())
+  productId        String    @map("product_id")
+  productModelId   String?   @map("product_model_id")
+  standardDiscount Decimal   @map("standard_discount") @db.Decimal(12, 2) // บาท/หน่วย
+  effectiveFrom    DateTime  @map("effective_from")
+  effectiveTo      DateTime? @map("effective_to")
+  isActive         Boolean   @default(true) @map("is_active")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  product      Product       @relation(fields: [productId], references: [id])
+  productModel ProductModel? @relation(fields: [productModelId], references: [id])
+
+  @@index([productId, productModelId, isActive])
+  @@map("discount_standards")
+}
+
+// เหตุผลการตัดจำหน่าย (เพิ่มได้)
+model DisposalReason {
+  id               String           @id @default(cuid())
+  code             String           @unique
+  name             String
+  counterpartyKind CounterpartyKind @map("counterparty_kind")
+  isActive         Boolean          @default(true) @map("is_active")
+
+  stockMovements ReturnStockMovement[]
+
+  @@map("disposal_reasons")
+}
+
+// แกนของสต็อก — ยอดคงเหลือ = SUM(quantityChange) ต่อ (product, model)
+model ReturnStockMovement {
+  id             String            @id @default(cuid())
+  productId      String            @map("product_id")
+  productModelId String?           @map("product_model_id")
+  quantityChange Int               @map("quantity_change") // +/- (receipt = +, disposal = -)
+  movementType   StockMovementType @map("movement_type")
+
+  // ใช้เมื่อ movementType = disposal
+  disposalReasonId String?           @map("disposal_reason_id")
+  // counterparty แบบ polymorphic: counterpartyType บอกว่า counterpartyId ชี้ไป suppliers หรือ buyers
+  counterpartyType CounterpartyType? @map("counterparty_type")
+  counterpartyId   String?           @map("counterparty_id")
+  counterpartyName String?           @map("counterparty_name")
+
+  // มูลค่าขาย — ผู้บริหารบันทึกผ่านเว็บภายหลัง (disposal เริ่มที่ pending)
+  saleValue       Decimal?         @map("sale_value") @db.Decimal(14, 2)
+  saleValueStatus SaleValueStatus? @map("sale_value_status")
+  saleValueById   String?          @map("sale_value_by")
+  saleValueAt     DateTime?        @map("sale_value_at")
+
+  // อ้างอิงต้นทาง เช่น reference_type="return_item", reference_id=...
+  referenceType String? @map("reference_type")
+  referenceId   String? @map("reference_id")
+
+  createdById String   @map("created_by")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  product        Product         @relation(fields: [productId], references: [id])
+  productModel   ProductModel?   @relation(fields: [productModelId], references: [id])
+  disposalReason DisposalReason? @relation(fields: [disposalReasonId], references: [id])
+  createdBy      User            @relation("StockMovementCreatedBy", fields: [createdById], references: [id])
+  saleValueBy    User?           @relation("StockMovementSaleValueBy", fields: [saleValueById], references: [id])
+
+  @@index([productId, productModelId])
+  @@index([movementType])
+  @@index([saleValueStatus])
+  @@index([referenceType, referenceId])
+  @@map("return_stock_movements")
+}
